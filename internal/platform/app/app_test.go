@@ -27,4 +27,10 @@ func TestNewAppCreatesHTTPServer(t *testing.T) {
 	if instance.HTTPServer == nil {
 		t.Fatal("expected HTTP server to be initialized")
 	}
+	if instance.Config == nil {
+		t.Fatal("expected app config to be initialized")
+	}
+	if instance.Config.HTTP.Port != 8080 {
+		t.Fatalf("expected HTTP port 8080, got %d", instance.Config.HTTP.Port)
+	}
 }

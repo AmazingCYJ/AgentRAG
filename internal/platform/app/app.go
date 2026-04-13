@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 
+	appconfig "github.com/AmazingCYJ/AgentRAG/internal/platform/config"
 	"github.com/gogf/gf/v2/frame/g"
 	"github.com/gogf/gf/v2/net/ghttp"
 )
@@ -11,6 +12,7 @@ import (
 // App 表示应用启动时的最小运行上下文。
 type App struct {
 	ConfigPath string
+	Config     *appconfig.Config
 	HTTPServer *ghttp.Server
 }
 
@@ -22,8 +24,17 @@ func NewApp(configPath string) (*App, error) {
 	if _, err := os.Stat(configPath); err != nil {
 		return nil, err
 	}
+	cfg, err := appconfig.Load(configPath)
+	if err != nil {
+		return nil, err
+	}
+	server := g.Server("agentrag-api")
+	if cfg.HTTP.Port > 0 {
+		server.SetPort(cfg.HTTP.Port)
+	}
 	return &App{
 		ConfigPath: configPath,
-		HTTPServer: g.Server("agentrag-api"),
+		Config:     cfg,
+		HTTPServer: server,
 	}, nil
 }
