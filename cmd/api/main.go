@@ -18,5 +18,6 @@ func main() {
 		log.Fatalf("启动失败: %v", err)
 	}
 
-	log.Printf("api 服务骨架已初始化: %T", instance.HTTPServer)
+	log.Printf("api 服务启动中，配置文件: %s", configPath)
+	instance.HTTPServer.Run()
 }

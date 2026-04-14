@@ -5,7 +5,7 @@ import (
 	"os"
 
 	appconfig "github.com/AmazingCYJ/AgentRAG/internal/platform/config"
-	"github.com/gogf/gf/v2/frame/g"
+	"github.com/AmazingCYJ/AgentRAG/internal/platform/httpx"
 	"github.com/gogf/gf/v2/net/ghttp"
 )
 
@@ -28,10 +28,7 @@ func NewApp(configPath string) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
-	server := g.Server("agentrag-api")
-	if cfg.HTTP.Port > 0 {
-		server.SetPort(cfg.HTTP.Port)
-	}
+	server := httpx.NewServer(cfg)
 	return &App{
 		ConfigPath: configPath,
 		Config:     cfg,
