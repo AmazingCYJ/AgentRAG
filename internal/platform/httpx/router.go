@@ -1,6 +1,7 @@
 package httpx
 
 import (
+	domainauth "github.com/AmazingCYJ/AgentRAG/internal/domain/auth"
 	appconfig "github.com/AmazingCYJ/AgentRAG/internal/platform/config"
 	"github.com/AmazingCYJ/AgentRAG/internal/platform/httpx/handlers"
 	"github.com/gogf/gf/v2/frame/g"
@@ -18,6 +19,10 @@ func newServer(cfg *appconfig.Config, name string) *ghttp.Server {
 	if cfg != nil && cfg.HTTP.Port > 0 {
 		server.SetPort(cfg.HTTP.Port)
 	}
+	authHandler := handlers.NewAuthHandler(domainauth.NewService(cfg.Auth))
 	server.BindHandler("/health", handlers.Health)
+	server.BindHandler("/auth/login", authHandler.Login)
+	server.BindHandler("/auth/logout", authHandler.Logout)
+	server.BindHandler("/user/me", authHandler.CurrentUser)
 	return server
 }

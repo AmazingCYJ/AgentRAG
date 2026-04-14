@@ -1,2 +1,11 @@
 http:
   port: 8080
+auth:
+  jwtSecret: "agentrag-dev-secret"
+  tokenTtl: "24h"
+  bootstrap:
+    userId: "u_admin"
+    username: "admin"
+    password: "admin123"
+    role: "admin"
+    avatar: ""

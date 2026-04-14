@@ -22,3 +22,12 @@ func WriteSuccess(r *ghttp.Request, data any) {
 		Data:    data,
 	})
 }
+
+// WriteError 写入失败响应并保留 HTTP 状态码。
+func WriteError(r *ghttp.Request, httpStatus int, code, message string) {
+	r.Response.WriteHeader(httpStatus)
+	r.Response.WriteJson(Body{
+		Code:    code,
+		Message: message,
+	})
+}
