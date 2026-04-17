@@ -288,6 +288,83 @@ func TestDeleteSessionRemovesConversationAndMessages(t *testing.T) {
 	}
 }
 
+func TestSubmitFeedbackUpdatesMessageVote(t *testing.T) {
+	conversationService := domainconversation.NewService()
+	conversationService.UpsertConversation(domainconversation.Session{
+		ConversationID: "c1",
+		UserID:         "u_admin",
+		Title:          "反馈测试",
+		LastTime:       time.Date(2026, 4, 14, 14, 0, 0, 0, time.UTC),
+	})
+	conversationService.AppendMessage(domainconversation.Message{
+		ID:             "m1",
+		ConversationID: "c1",
+		UserID:         "u_admin",
+		Role:           "assistant",
+		Content:        "这是回答",
+		CreateTime:     time.Date(2026, 4, 14, 14, 1, 0, 0, time.UTC),
+	})
+
+	server := newServerWithDeps(&appconfig.Config{
+		HTTP: appconfig.HTTPConfig{Port: 8080},
+		Auth: appconfig.AuthConfig{
+			JWTSecret: "test-secret",
+			TokenTTL:  time.Hour,
+			Bootstrap: appconfig.BootstrapUserConfig{
+				UserID:   "u_admin",
+				Username: "admin",
+				Password: "admin123",
+				Role:     "admin",
+			},
+		},
+	}, guid.S(), serverDeps{
+		conversationService: conversationService,
+	})
+	server.SetAddr("127.0.0.1:0")
+	if err := server.Start(); err != nil {
+		t.Fatalf("start server failed: %v", err)
+	}
+	defer server.Shutdown()
+	time.Sleep(100 * time.Millisecond)
+
+	token := loginAndGetToken(t, server.GetListenedPort())
+	payload, _ := json.Marshal(map[string]int{"vote": 1})
+	request, err := http.NewRequest(
+		http.MethodPost,
+		fmt.Sprintf("http://127.0.0.1:%d/conversations/messages/m1/feedback", server.GetListenedPort()),
+		bytes.NewReader(payload),
+	)
+	if err != nil {
+		t.Fatalf("create feedback request failed: %v", err)
+	}
+	request.Header.Set("Authorization", token)
+	request.Header.Set("Content-Type", "application/json")
+
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("submit feedback failed: %v", err)
+	}
+	defer response.Body.Close()
+
+	var body struct {
+		Code string `json:"code"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatalf("decode feedback response failed: %v", err)
+	}
+	if body.Code != "0" {
+		t.Fatalf("expected code 0, got %s", body.Code)
+	}
+
+	messages := conversationService.ListMessages("c1", "u_admin")
+	if len(messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(messages))
+	}
+	if messages[0].Vote == nil || *messages[0].Vote != 1 {
+		t.Fatalf("expected message vote 1, got %#v", messages[0].Vote)
+	}
+}
+
 func loginAndGetToken(t *testing.T, port int) string {
 	t.Helper()
 

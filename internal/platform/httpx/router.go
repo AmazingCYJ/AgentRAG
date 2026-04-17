@@ -54,6 +54,7 @@ func newServerWithDeps(cfg *appconfig.Config, name string, deps serverDeps) *ght
 	server.BindHandler("PUT:/conversations/{conversationId}", conversationHandler.Rename)
 	server.BindHandler("DELETE:/conversations/{conversationId}", conversationHandler.Delete)
 	server.BindHandler("/conversations/{conversationId}/messages", conversationHandler.ListMessages)
+	server.BindHandler("POST:/conversations/messages/{messageId}/feedback", conversationHandler.SubmitFeedback)
 	server.BindHandler("GET:/rag/v3/chat", chatHandler.StreamChat)
 	server.BindHandler("POST:/rag/v3/stop", chatHandler.Stop)
 	return server

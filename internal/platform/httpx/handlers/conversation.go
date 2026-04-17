@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 
 	domainauth "github.com/AmazingCYJ/AgentRAG/internal/domain/auth"
 	domainconversation "github.com/AmazingCYJ/AgentRAG/internal/domain/conversation"
@@ -47,6 +48,10 @@ type renameConversationRequest struct {
 	Title string `json:"title"`
 }
 
+type feedbackRequest struct {
+	Vote int `json:"vote"`
+}
+
 // Rename 更新指定会话标题。
 func (h *ConversationHandler) Rename(r *ghttp.Request) {
 	profile, err := h.authService.CurrentUser(r.GetHeader("Authorization"))
@@ -78,4 +83,34 @@ func (h *ConversationHandler) Delete(r *ghttp.Request) {
 		return
 	}
 	resp.WriteSuccess(r, nil)
+}
+
+// SubmitFeedback 提交消息点赞或点踩。
+func (h *ConversationHandler) SubmitFeedback(r *ghttp.Request) {
+	profile, err := h.authService.CurrentUser(r.GetHeader("Authorization"))
+	if err != nil {
+		resp.WriteError(r, 401, "401", "未登录")
+		return
+	}
+
+	var req feedbackRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		resp.WriteError(r, 400, "400", "请求参数错误")
+		return
+	}
+
+	err = h.conversationService.SubmitFeedback(r.Get("messageId").String(), profile.UserID, req.Vote)
+	if err == nil {
+		resp.WriteSuccess(r, nil)
+		return
+	}
+	if errors.Is(err, domainconversation.ErrInvalidVote) {
+		resp.WriteError(r, 400, "400", err.Error())
+		return
+	}
+	if errors.Is(err, domainconversation.ErrMessageNotFound) {
+		resp.WriteError(r, 404, "404", err.Error())
+		return
+	}
+	resp.WriteError(r, 500, "500", "提交反馈失败")
 }

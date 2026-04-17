@@ -11,6 +11,10 @@ import (
 var (
 	// ErrConversationNotFound 表示会话不存在。
 	ErrConversationNotFound = errors.New("会话不存在")
+	// ErrMessageNotFound 表示消息不存在。
+	ErrMessageNotFound = errors.New("消息不存在")
+	// ErrInvalidVote 表示反馈值不合法。
+	ErrInvalidVote = errors.New("反馈值必须为 1 或 -1")
 )
 
 // Session 表示内部会话记录。
@@ -188,4 +192,32 @@ func (s *Service) Delete(conversationID, userID string) error {
 		delete(s.messages[userID], conversationID)
 	}
 	return nil
+}
+
+// SubmitFeedback 更新指定消息的点赞或点踩状态。
+func (s *Service) SubmitFeedback(messageID, userID string, vote int) error {
+	if vote != 1 && vote != -1 {
+		return ErrInvalidVote
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	records := s.messages[userID]
+	if records == nil {
+		return ErrMessageNotFound
+	}
+
+	for conversationID, messages := range records {
+		for index := range messages {
+			if messages[index].ID != messageID {
+				continue
+			}
+			nextVote := vote
+			messages[index].Vote = &nextVote
+			records[conversationID] = messages
+			return nil
+		}
+	}
+	return ErrMessageNotFound
 }
