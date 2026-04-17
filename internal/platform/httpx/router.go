@@ -4,6 +4,7 @@ import (
 	domainauth "github.com/AmazingCYJ/AgentRAG/internal/domain/auth"
 	domainchat "github.com/AmazingCYJ/AgentRAG/internal/domain/chat"
 	domainconversation "github.com/AmazingCYJ/AgentRAG/internal/domain/conversation"
+	domainingestion "github.com/AmazingCYJ/AgentRAG/internal/domain/ingestion"
 	domainintenttree "github.com/AmazingCYJ/AgentRAG/internal/domain/intenttree"
 	domainknowledge "github.com/AmazingCYJ/AgentRAG/internal/domain/knowledge"
 	domainquerymapping "github.com/AmazingCYJ/AgentRAG/internal/domain/querymapping"
@@ -21,6 +22,7 @@ type serverDeps struct {
 	chatService           *domainchat.Service
 	conversationService   *domainconversation.Service
 	intentTreeService     *domainintenttree.Service
+	ingestionService      *domainingestion.Service
 	knowledgeService      *domainknowledge.Service
 	queryMappingService   *domainquerymapping.Service
 	ragTraceService       *domainragtrace.Service
@@ -63,6 +65,10 @@ func newServerWithDeps(cfg *appconfig.Config, name string, deps serverDeps) *ght
 	if intentTreeService == nil {
 		intentTreeService = domainintenttree.NewService()
 	}
+	ingestionService := deps.ingestionService
+	if ingestionService == nil {
+		ingestionService = domainingestion.NewService()
+	}
 	knowledgeService := deps.knowledgeService
 	if knowledgeService == nil {
 		knowledgeService = domainknowledge.NewService()
@@ -83,6 +89,8 @@ func newServerWithDeps(cfg *appconfig.Config, name string, deps serverDeps) *ght
 	chatHandler := handlers.NewChatHandler(authService, chatService)
 	conversationHandler := handlers.NewConversationHandler(authService, conversationService)
 	intentTreeHandler := handlers.NewIntentTreeHandler(authService, intentTreeService)
+	ingestionPipelineHandler := handlers.NewIngestionPipelineHandler(authService, ingestionService)
+	ingestionTaskHandler := handlers.NewIngestionTaskHandler(authService, ingestionService)
 	knowledgeBaseHandler := handlers.NewKnowledgeBaseHandler(authService, knowledgeService)
 	knowledgeDocumentHandler := handlers.NewKnowledgeDocumentHandler(authService, knowledgeService)
 	knowledgeChunkHandler := handlers.NewKnowledgeChunkHandler(authService, knowledgeService)
@@ -98,6 +106,16 @@ func newServerWithDeps(cfg *appconfig.Config, name string, deps serverDeps) *ght
 	server.BindHandler("/rag/traces/runs", ragTraceHandler.PageRuns)
 	server.BindHandler("GET:/rag/traces/runs/{traceId}", ragTraceHandler.Detail)
 	server.BindHandler("GET:/rag/traces/runs/{traceId}/nodes", ragTraceHandler.Nodes)
+	server.BindHandler("POST:/ingestion/pipelines", ingestionPipelineHandler.Create)
+	server.BindHandler("PUT:/ingestion/pipelines/{id}", ingestionPipelineHandler.Update)
+	server.BindHandler("GET:/ingestion/pipelines/{id}", ingestionPipelineHandler.Get)
+	server.BindHandler("GET:/ingestion/pipelines", ingestionPipelineHandler.Page)
+	server.BindHandler("DELETE:/ingestion/pipelines/{id}", ingestionPipelineHandler.Delete)
+	server.BindHandler("POST:/ingestion/tasks", ingestionTaskHandler.Create)
+	server.BindHandler("POST:/ingestion/tasks/upload", ingestionTaskHandler.Upload)
+	server.BindHandler("GET:/ingestion/tasks/{id}", ingestionTaskHandler.Get)
+	server.BindHandler("GET:/ingestion/tasks/{id}/nodes", ingestionTaskHandler.Nodes)
+	server.BindHandler("GET:/ingestion/tasks", ingestionTaskHandler.Page)
 	server.BindHandler("GET:/knowledge-base/chunk-strategies", knowledgeBaseHandler.ChunkStrategies)
 	server.BindHandler("POST:/knowledge-base", knowledgeBaseHandler.Create)
 	server.BindHandler("PUT:/knowledge-base/{kb-id}", knowledgeBaseHandler.Update)
