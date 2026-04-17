@@ -6,6 +6,7 @@ import (
 	domainconversation "github.com/AmazingCYJ/AgentRAG/internal/domain/conversation"
 	domainintenttree "github.com/AmazingCYJ/AgentRAG/internal/domain/intenttree"
 	domainquerymapping "github.com/AmazingCYJ/AgentRAG/internal/domain/querymapping"
+	domainragtrace "github.com/AmazingCYJ/AgentRAG/internal/domain/ragtrace"
 	domainsamplequestion "github.com/AmazingCYJ/AgentRAG/internal/domain/samplequestion"
 	domainsettings "github.com/AmazingCYJ/AgentRAG/internal/domain/settings"
 	appconfig "github.com/AmazingCYJ/AgentRAG/internal/platform/config"
@@ -20,6 +21,7 @@ type serverDeps struct {
 	conversationService   *domainconversation.Service
 	intentTreeService     *domainintenttree.Service
 	queryMappingService   *domainquerymapping.Service
+	ragTraceService       *domainragtrace.Service
 	settingsService       *domainsettings.Service
 	sampleQuestionService *domainsamplequestion.Service
 }
@@ -47,9 +49,13 @@ func newServerWithDeps(cfg *appconfig.Config, name string, deps serverDeps) *ght
 	if conversationService == nil {
 		conversationService = domainconversation.NewService()
 	}
+	ragTraceService := deps.ragTraceService
+	if ragTraceService == nil {
+		ragTraceService = domainragtrace.NewService()
+	}
 	chatService := deps.chatService
 	if chatService == nil {
-		chatService = domainchat.NewService(conversationService)
+		chatService = domainchat.NewService(conversationService, ragTraceService)
 	}
 	intentTreeService := deps.intentTreeService
 	if intentTreeService == nil {
@@ -72,6 +78,7 @@ func newServerWithDeps(cfg *appconfig.Config, name string, deps serverDeps) *ght
 	conversationHandler := handlers.NewConversationHandler(authService, conversationService)
 	intentTreeHandler := handlers.NewIntentTreeHandler(authService, intentTreeService)
 	queryMappingHandler := handlers.NewQueryMappingHandler(authService, queryMappingService)
+	ragTraceHandler := handlers.NewRagTraceHandler(authService, ragTraceService)
 	settingsHandler := handlers.NewSettingsHandler(authService, settingsService)
 	sampleQuestionHandler := handlers.NewSampleQuestionHandler(authService, sampleQuestionService)
 	server.BindHandler("/health", handlers.Health)
@@ -79,6 +86,9 @@ func newServerWithDeps(cfg *appconfig.Config, name string, deps serverDeps) *ght
 	server.BindHandler("/auth/logout", authHandler.Logout)
 	server.BindHandler("/user/me", authHandler.CurrentUser)
 	server.BindHandler("/rag/settings", settingsHandler.Get)
+	server.BindHandler("/rag/traces/runs", ragTraceHandler.PageRuns)
+	server.BindHandler("GET:/rag/traces/runs/{traceId}", ragTraceHandler.Detail)
+	server.BindHandler("GET:/rag/traces/runs/{traceId}/nodes", ragTraceHandler.Nodes)
 	server.BindHandler("/intent-tree/trees", intentTreeHandler.Tree)
 	server.BindHandler("POST:/intent-tree", intentTreeHandler.CreateNode)
 	server.BindHandler("PUT:/intent-tree/{id}", intentTreeHandler.UpdateNode)

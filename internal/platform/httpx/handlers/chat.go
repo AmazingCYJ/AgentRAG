@@ -44,6 +44,7 @@ func (h *ChatHandler) StreamChat(r *ghttp.Request) {
 	writer := newSSEWriter(r)
 	err = h.chatService.StreamChat(r.Context(), domainchat.StreamRequest{
 		UserID:         profile.UserID,
+		Username:       profile.Username,
 		Question:       question,
 		ConversationID: strings.TrimSpace(r.Get("conversationId").String()),
 		DeepThinking:   r.Get("deepThinking").Bool(),

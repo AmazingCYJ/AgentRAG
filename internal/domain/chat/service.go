@@ -8,6 +8,7 @@ import (
 	"time"
 
 	domainconversation "github.com/AmazingCYJ/AgentRAG/internal/domain/conversation"
+	domainragtrace "github.com/AmazingCYJ/AgentRAG/internal/domain/ragtrace"
 	"github.com/gogf/gf/v2/util/guid"
 )
 
@@ -28,6 +29,7 @@ const (
 // StreamRequest 定义流式聊天所需的输入参数。
 type StreamRequest struct {
 	UserID         string
+	Username       string
 	Question       string
 	ConversationID string
 	DeepThinking   bool
@@ -60,6 +62,7 @@ type taskHandle struct {
 // Service 提供当前阶段最小可用的流式聊天与任务取消能力。
 type Service struct {
 	conversationService *domainconversation.Service
+	traceService        *domainragtrace.Service
 
 	mu    sync.Mutex
 	tasks map[string]taskHandle
@@ -70,9 +73,10 @@ type Service struct {
 }
 
 // NewService 创建聊天服务。
-func NewService(conversationService *domainconversation.Service) *Service {
+func NewService(conversationService *domainconversation.Service, traceService *domainragtrace.Service) *Service {
 	return &Service{
 		conversationService: conversationService,
+		traceService:        traceService,
 		tasks:               make(map[string]taskHandle),
 		now:                 time.Now,
 		newID: func() string {
@@ -124,14 +128,14 @@ func (s *Service) StreamChat(ctx context.Context, req StreamRequest, writer Even
 	}
 
 	if err := s.waitFn(taskCtx, prepareDelay); err != nil {
-		return s.finishCanceled(writer, req.UserID, conversationID, title, "", "", startedAt)
+		return s.finishCanceled(writer, req, conversationID, taskID, title, "", "", startedAt)
 	}
 
 	thinkingContent := ""
 	if req.DeepThinking {
 		for _, chunk := range splitText(buildThinkingText(question), thinkingChunkSize) {
 			if err := s.waitFn(taskCtx, chunkDelay); err != nil {
-				return s.finishCanceled(writer, req.UserID, conversationID, title, "", thinkingContent, startedAt)
+				return s.finishCanceled(writer, req, conversationID, taskID, title, "", thinkingContent, startedAt)
 			}
 			if err := writer.Event("message", streamMessage{
 				Type:  "think",
@@ -146,7 +150,7 @@ func (s *Service) StreamChat(ctx context.Context, req StreamRequest, writer Even
 	responseContent := ""
 	for _, chunk := range splitText(buildResponseText(question, req.DeepThinking), responseChunkSize) {
 		if err := s.waitFn(taskCtx, chunkDelay); err != nil {
-			return s.finishCanceled(writer, req.UserID, conversationID, title, responseContent, thinkingContent, startedAt)
+			return s.finishCanceled(writer, req, conversationID, taskID, title, responseContent, thinkingContent, startedAt)
 		}
 		if err := writer.Event("message", streamMessage{
 			Type:  "response",
@@ -158,6 +162,7 @@ func (s *Service) StreamChat(ctx context.Context, req StreamRequest, writer Even
 	}
 
 	messageID := s.persistAssistantMessage(req.UserID, conversationID, title, responseContent, thinkingContent, startedAt)
+	s.recordTrace(req, conversationID, taskID, "success", "", startedAt, s.now())
 	if err := writer.Event("finish", streamCompletion{
 		MessageID: messageID,
 		Title:     title,
@@ -179,10 +184,12 @@ func (s *Service) StopTask(taskID string) {
 
 func (s *Service) finishCanceled(
 	writer EventWriter,
-	userID, conversationID, title, responseContent, thinkingContent string,
+	req StreamRequest,
+	conversationID, taskID, title, responseContent, thinkingContent string,
 	startedAt time.Time,
 ) error {
-	messageID := s.persistAssistantMessage(userID, conversationID, title, responseContent, thinkingContent, startedAt)
+	messageID := s.persistAssistantMessage(req.UserID, conversationID, title, responseContent, thinkingContent, startedAt)
+	s.recordTrace(req, conversationID, taskID, "failed", "用户停止生成", startedAt, s.now())
 	if err := writer.Event("cancel", streamCompletion{
 		MessageID: messageID,
 		Title:     title,
@@ -225,6 +232,30 @@ func (s *Service) persistAssistantMessage(
 		CreateTime:       lastTime,
 	})
 	return messageID
+}
+
+func (s *Service) recordTrace(
+	req StreamRequest,
+	conversationID, taskID, status, errorMessage string,
+	startedAt, endedAt time.Time,
+) {
+	if s.traceService == nil {
+		return
+	}
+	s.traceService.RecordChatTrace(domainragtrace.ChatTraceRecord{
+		TraceName:      buildConversationTitle(req.Question),
+		ConversationID: conversationID,
+		TaskID:         taskID,
+		UserName:       req.Username,
+		Username:       req.Username,
+		UserID:         req.UserID,
+		Status:         status,
+		ErrorMessage:   errorMessage,
+		DurationMs:     endedAt.Sub(startedAt).Milliseconds(),
+		StartTime:      startedAt,
+		EndTime:        endedAt,
+		DeepThinking:   req.DeepThinking,
+	})
 }
 
 func (s *Service) registerTask(taskID string, cancel context.CancelFunc) {
