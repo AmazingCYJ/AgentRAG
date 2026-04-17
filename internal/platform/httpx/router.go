@@ -2,6 +2,7 @@ package httpx
 
 import (
 	domainauth "github.com/AmazingCYJ/AgentRAG/internal/domain/auth"
+	domainchat "github.com/AmazingCYJ/AgentRAG/internal/domain/chat"
 	domainconversation "github.com/AmazingCYJ/AgentRAG/internal/domain/conversation"
 	appconfig "github.com/AmazingCYJ/AgentRAG/internal/platform/config"
 	"github.com/AmazingCYJ/AgentRAG/internal/platform/httpx/handlers"
@@ -11,6 +12,7 @@ import (
 
 type serverDeps struct {
 	authService         *domainauth.Service
+	chatService         *domainchat.Service
 	conversationService *domainconversation.Service
 }
 
@@ -37,7 +39,12 @@ func newServerWithDeps(cfg *appconfig.Config, name string, deps serverDeps) *ght
 	if conversationService == nil {
 		conversationService = domainconversation.NewService()
 	}
+	chatService := deps.chatService
+	if chatService == nil {
+		chatService = domainchat.NewService(conversationService)
+	}
 	authHandler := handlers.NewAuthHandler(authService)
+	chatHandler := handlers.NewChatHandler(authService, chatService)
 	conversationHandler := handlers.NewConversationHandler(authService, conversationService)
 	server.BindHandler("/health", handlers.Health)
 	server.BindHandler("/auth/login", authHandler.Login)
@@ -47,5 +54,7 @@ func newServerWithDeps(cfg *appconfig.Config, name string, deps serverDeps) *ght
 	server.BindHandler("PUT:/conversations/{conversationId}", conversationHandler.Rename)
 	server.BindHandler("DELETE:/conversations/{conversationId}", conversationHandler.Delete)
 	server.BindHandler("/conversations/{conversationId}/messages", conversationHandler.ListMessages)
+	server.BindHandler("GET:/rag/v3/chat", chatHandler.StreamChat)
+	server.BindHandler("POST:/rag/v3/stop", chatHandler.Stop)
 	return server
 }
