@@ -5,6 +5,7 @@ import (
 	domainchat "github.com/AmazingCYJ/AgentRAG/internal/domain/chat"
 	domainconversation "github.com/AmazingCYJ/AgentRAG/internal/domain/conversation"
 	domainintenttree "github.com/AmazingCYJ/AgentRAG/internal/domain/intenttree"
+	domainknowledge "github.com/AmazingCYJ/AgentRAG/internal/domain/knowledge"
 	domainquerymapping "github.com/AmazingCYJ/AgentRAG/internal/domain/querymapping"
 	domainragtrace "github.com/AmazingCYJ/AgentRAG/internal/domain/ragtrace"
 	domainsamplequestion "github.com/AmazingCYJ/AgentRAG/internal/domain/samplequestion"
@@ -20,6 +21,7 @@ type serverDeps struct {
 	chatService           *domainchat.Service
 	conversationService   *domainconversation.Service
 	intentTreeService     *domainintenttree.Service
+	knowledgeService      *domainknowledge.Service
 	queryMappingService   *domainquerymapping.Service
 	ragTraceService       *domainragtrace.Service
 	settingsService       *domainsettings.Service
@@ -61,6 +63,10 @@ func newServerWithDeps(cfg *appconfig.Config, name string, deps serverDeps) *ght
 	if intentTreeService == nil {
 		intentTreeService = domainintenttree.NewService()
 	}
+	knowledgeService := deps.knowledgeService
+	if knowledgeService == nil {
+		knowledgeService = domainknowledge.NewService()
+	}
 	queryMappingService := deps.queryMappingService
 	if queryMappingService == nil {
 		queryMappingService = domainquerymapping.NewService()
@@ -77,6 +83,9 @@ func newServerWithDeps(cfg *appconfig.Config, name string, deps serverDeps) *ght
 	chatHandler := handlers.NewChatHandler(authService, chatService)
 	conversationHandler := handlers.NewConversationHandler(authService, conversationService)
 	intentTreeHandler := handlers.NewIntentTreeHandler(authService, intentTreeService)
+	knowledgeBaseHandler := handlers.NewKnowledgeBaseHandler(authService, knowledgeService)
+	knowledgeDocumentHandler := handlers.NewKnowledgeDocumentHandler(authService, knowledgeService)
+	knowledgeChunkHandler := handlers.NewKnowledgeChunkHandler(authService, knowledgeService)
 	queryMappingHandler := handlers.NewQueryMappingHandler(authService, queryMappingService)
 	ragTraceHandler := handlers.NewRagTraceHandler(authService, ragTraceService)
 	settingsHandler := handlers.NewSettingsHandler(authService, settingsService)
@@ -89,6 +98,27 @@ func newServerWithDeps(cfg *appconfig.Config, name string, deps serverDeps) *ght
 	server.BindHandler("/rag/traces/runs", ragTraceHandler.PageRuns)
 	server.BindHandler("GET:/rag/traces/runs/{traceId}", ragTraceHandler.Detail)
 	server.BindHandler("GET:/rag/traces/runs/{traceId}/nodes", ragTraceHandler.Nodes)
+	server.BindHandler("GET:/knowledge-base/chunk-strategies", knowledgeBaseHandler.ChunkStrategies)
+	server.BindHandler("POST:/knowledge-base", knowledgeBaseHandler.Create)
+	server.BindHandler("PUT:/knowledge-base/{kb-id}", knowledgeBaseHandler.Update)
+	server.BindHandler("DELETE:/knowledge-base/{kb-id}", knowledgeBaseHandler.Delete)
+	server.BindHandler("GET:/knowledge-base/{kb-id}", knowledgeBaseHandler.Get)
+	server.BindHandler("GET:/knowledge-base", knowledgeBaseHandler.Page)
+	server.BindHandler("POST:/knowledge-base/{kb-id}/docs/upload", knowledgeDocumentHandler.Upload)
+	server.BindHandler("POST:/knowledge-base/docs/{doc-id}/chunk", knowledgeDocumentHandler.StartChunk)
+	server.BindHandler("DELETE:/knowledge-base/docs/{doc-id}", knowledgeDocumentHandler.Delete)
+	server.BindHandler("GET:/knowledge-base/docs/{docId}", knowledgeDocumentHandler.Get)
+	server.BindHandler("PUT:/knowledge-base/docs/{docId}", knowledgeDocumentHandler.Update)
+	server.BindHandler("GET:/knowledge-base/{kb-id}/docs", knowledgeDocumentHandler.Page)
+	server.BindHandler("GET:/knowledge-base/docs/search", knowledgeDocumentHandler.Search)
+	server.BindHandler("PATCH:/knowledge-base/docs/{docId}/enable", knowledgeDocumentHandler.Enable)
+	server.BindHandler("GET:/knowledge-base/docs/{docId}/chunk-logs", knowledgeDocumentHandler.ChunkLogs)
+	server.BindHandler("GET:/knowledge-base/docs/{doc-id}/chunks", knowledgeChunkHandler.Page)
+	server.BindHandler("POST:/knowledge-base/docs/{doc-id}/chunks", knowledgeChunkHandler.Create)
+	server.BindHandler("PUT:/knowledge-base/docs/{doc-id}/chunks/{chunk-id}", knowledgeChunkHandler.Update)
+	server.BindHandler("DELETE:/knowledge-base/docs/{doc-id}/chunks/{chunk-id}", knowledgeChunkHandler.Delete)
+	server.BindHandler("PATCH:/knowledge-base/docs/{doc-id}/chunks/{chunk-id}/enable", knowledgeChunkHandler.Enable)
+	server.BindHandler("PATCH:/knowledge-base/docs/{doc-id}/chunks/batch-enable", knowledgeChunkHandler.BatchEnable)
 	server.BindHandler("/intent-tree/trees", intentTreeHandler.Tree)
 	server.BindHandler("POST:/intent-tree", intentTreeHandler.CreateNode)
 	server.BindHandler("PUT:/intent-tree/{id}", intentTreeHandler.UpdateNode)
