@@ -4,6 +4,8 @@ import (
 	domainauth "github.com/AmazingCYJ/AgentRAG/internal/domain/auth"
 	domainchat "github.com/AmazingCYJ/AgentRAG/internal/domain/chat"
 	domainconversation "github.com/AmazingCYJ/AgentRAG/internal/domain/conversation"
+	domainintenttree "github.com/AmazingCYJ/AgentRAG/internal/domain/intenttree"
+	domainquerymapping "github.com/AmazingCYJ/AgentRAG/internal/domain/querymapping"
 	domainsamplequestion "github.com/AmazingCYJ/AgentRAG/internal/domain/samplequestion"
 	domainsettings "github.com/AmazingCYJ/AgentRAG/internal/domain/settings"
 	appconfig "github.com/AmazingCYJ/AgentRAG/internal/platform/config"
@@ -16,6 +18,8 @@ type serverDeps struct {
 	authService           *domainauth.Service
 	chatService           *domainchat.Service
 	conversationService   *domainconversation.Service
+	intentTreeService     *domainintenttree.Service
+	queryMappingService   *domainquerymapping.Service
 	settingsService       *domainsettings.Service
 	sampleQuestionService *domainsamplequestion.Service
 }
@@ -47,6 +51,14 @@ func newServerWithDeps(cfg *appconfig.Config, name string, deps serverDeps) *ght
 	if chatService == nil {
 		chatService = domainchat.NewService(conversationService)
 	}
+	intentTreeService := deps.intentTreeService
+	if intentTreeService == nil {
+		intentTreeService = domainintenttree.NewService()
+	}
+	queryMappingService := deps.queryMappingService
+	if queryMappingService == nil {
+		queryMappingService = domainquerymapping.NewService()
+	}
 	settingsService := deps.settingsService
 	if settingsService == nil {
 		settingsService = domainsettings.NewService()
@@ -58,6 +70,8 @@ func newServerWithDeps(cfg *appconfig.Config, name string, deps serverDeps) *ght
 	authHandler := handlers.NewAuthHandler(authService)
 	chatHandler := handlers.NewChatHandler(authService, chatService)
 	conversationHandler := handlers.NewConversationHandler(authService, conversationService)
+	intentTreeHandler := handlers.NewIntentTreeHandler(authService, intentTreeService)
+	queryMappingHandler := handlers.NewQueryMappingHandler(authService, queryMappingService)
 	settingsHandler := handlers.NewSettingsHandler(authService, settingsService)
 	sampleQuestionHandler := handlers.NewSampleQuestionHandler(authService, sampleQuestionService)
 	server.BindHandler("/health", handlers.Health)
@@ -65,11 +79,23 @@ func newServerWithDeps(cfg *appconfig.Config, name string, deps serverDeps) *ght
 	server.BindHandler("/auth/logout", authHandler.Logout)
 	server.BindHandler("/user/me", authHandler.CurrentUser)
 	server.BindHandler("/rag/settings", settingsHandler.Get)
+	server.BindHandler("/intent-tree/trees", intentTreeHandler.Tree)
+	server.BindHandler("POST:/intent-tree", intentTreeHandler.CreateNode)
+	server.BindHandler("PUT:/intent-tree/{id}", intentTreeHandler.UpdateNode)
+	server.BindHandler("DELETE:/intent-tree/{id}", intentTreeHandler.DeleteNode)
+	server.BindHandler("POST:/intent-tree/batch/enable", intentTreeHandler.BatchEnable)
+	server.BindHandler("POST:/intent-tree/batch/disable", intentTreeHandler.BatchDisable)
+	server.BindHandler("POST:/intent-tree/batch/delete", intentTreeHandler.BatchDelete)
 	server.BindHandler("/conversations", conversationHandler.ListConversations)
 	server.BindHandler("PUT:/conversations/{conversationId}", conversationHandler.Rename)
 	server.BindHandler("DELETE:/conversations/{conversationId}", conversationHandler.Delete)
 	server.BindHandler("/conversations/{conversationId}/messages", conversationHandler.ListMessages)
 	server.BindHandler("POST:/conversations/messages/{messageId}/feedback", conversationHandler.SubmitFeedback)
+	server.BindHandler("/mappings", queryMappingHandler.Page)
+	server.BindHandler("GET:/mappings/{id}", queryMappingHandler.Get)
+	server.BindHandler("POST:/mappings", queryMappingHandler.Create)
+	server.BindHandler("PUT:/mappings/{id}", queryMappingHandler.Update)
+	server.BindHandler("DELETE:/mappings/{id}", queryMappingHandler.Delete)
 	server.BindHandler("/rag/sample-questions", sampleQuestionHandler.ListWelcome)
 	server.BindHandler("/sample-questions", sampleQuestionHandler.Page)
 	server.BindHandler("GET:/sample-questions/{id}", sampleQuestionHandler.Get)
