@@ -15,8 +15,10 @@ import (
 	domainusermgmt "github.com/AmazingCYJ/AgentRAG/internal/domain/usermgmt"
 	appconfig "github.com/AmazingCYJ/AgentRAG/internal/platform/config"
 	"github.com/AmazingCYJ/AgentRAG/internal/platform/httpx/handlers"
+	platformstate "github.com/AmazingCYJ/AgentRAG/internal/platform/state"
 	"github.com/gogf/gf/v2/frame/g"
 	"github.com/gogf/gf/v2/net/ghttp"
+	"strings"
 )
 
 type serverDeps struct {
@@ -49,9 +51,15 @@ func newServerWithDeps(cfg *appconfig.Config, name string, deps serverDeps) *ght
 	if cfg != nil && cfg.HTTP.Port > 0 {
 		server.SetPort(cfg.HTTP.Port)
 	}
+	var stateStore *platformstate.FileStore
+	if cfg != nil && strings.TrimSpace(cfg.State.File) != "" {
+		if store, err := platformstate.NewFileStore(cfg.State.File); err == nil {
+			stateStore = store
+		}
+	}
 	userService := deps.userService
 	if userService == nil {
-		userService = domainusermgmt.NewService(cfg.Auth)
+		userService = domainusermgmt.NewService(cfg.Auth, stateStore)
 	}
 	authService := deps.authService
 	if authService == nil {

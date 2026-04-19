@@ -9,3 +9,5 @@ auth:
     password: "admin123"
     role: "admin"
     avatar: ""
+state:
+  file: "data/state.json"

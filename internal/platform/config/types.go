@@ -4,8 +4,9 @@ import "time"
 
 // Config 表示 AgentRAG 当前阶段的最小配置集合。
 type Config struct {
-	HTTP HTTPConfig `json:"http"`
-	Auth AuthConfig `json:"auth"`
+	HTTP  HTTPConfig  `json:"http"`
+	Auth  AuthConfig  `json:"auth"`
+	State StateConfig `json:"state"`
 }
 
 // HTTPConfig 定义 HTTP 服务监听配置。
@@ -27,4 +28,9 @@ type BootstrapUserConfig struct {
 	Password string `json:"password"`
 	Role     string `json:"role"`
 	Avatar   string `json:"avatar"`
+}
+
+// StateConfig 定义本地状态持久化配置。
+type StateConfig struct {
+	File string `json:"file"`
 }

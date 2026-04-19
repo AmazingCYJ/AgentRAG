@@ -8,6 +8,7 @@ import (
 	"time"
 
 	appconfig "github.com/AmazingCYJ/AgentRAG/internal/platform/config"
+	platformstate "github.com/AmazingCYJ/AgentRAG/internal/platform/state"
 	"github.com/gogf/gf/v2/util/guid"
 )
 
@@ -71,10 +72,11 @@ type Service struct {
 	protectedID string
 	now         func() time.Time
 	newID       func() string
+	store       *platformstate.FileStore
 }
 
 // NewService 创建用户管理服务，并注入默认管理员。
-func NewService(cfg appconfig.AuthConfig) *Service {
+func NewService(cfg appconfig.AuthConfig, store *platformstate.FileStore) *Service {
 	now := time.Now()
 	adminID := strings.TrimSpace(cfg.Bootstrap.UserID)
 	if adminID == "" {
@@ -89,16 +91,39 @@ func NewService(cfg appconfig.AuthConfig) *Service {
 		CreateTime: now,
 		UpdateTime: now,
 	}
-	return &Service{
-		users: map[string]User{
-			admin.ID: admin,
-		},
+	service := &Service{
+		users:       map[string]User{},
 		protectedID: admin.ID,
 		now:         time.Now,
 		newID: func() string {
 			return "user_" + strings.ReplaceAll(guid.S(), "-", "")
 		},
+		store: store,
 	}
+	if snapshot, err := service.loadSnapshot(); err == nil && len(snapshot.Users) > 0 {
+		for _, record := range snapshot.Users {
+			service.users[record.ID] = User{
+				ID:         record.ID,
+				Username:   record.Username,
+				Password:   record.Password,
+				Role:       record.Role,
+				Avatar:     record.Avatar,
+				CreateTime: record.CreateTime,
+				UpdateTime: record.UpdateTime,
+			}
+		}
+	}
+	if _, ok := service.users[admin.ID]; !ok {
+		service.users[admin.ID] = admin
+	}
+	return service
+}
+
+func (s *Service) loadSnapshot() (platformstate.Snapshot, error) {
+	if s.store == nil {
+		return platformstate.Snapshot{}, nil
+	}
+	return s.store.Load()
 }
 
 // Page 分页查询用户。
@@ -177,6 +202,9 @@ func (s *Service) Create(req CreateRequest) (string, error) {
 		CreateTime: now,
 		UpdateTime: now,
 	}
+	if err := s.persistLocked(); err != nil {
+		return "", err
+	}
 	return id, nil
 }
 
@@ -205,6 +233,9 @@ func (s *Service) Update(id string, req UpdateRequest) error {
 	user.Avatar = strings.TrimSpace(req.Avatar)
 	user.UpdateTime = s.now()
 	s.users[id] = user
+	if err := s.persistLocked(); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -220,6 +251,9 @@ func (s *Service) Delete(id string) error {
 		return ErrUserNotFound
 	}
 	delete(s.users, id)
+	if err := s.persistLocked(); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -273,7 +307,32 @@ func (s *Service) ChangePassword(id, currentPassword, newPassword string) error 
 	user.Password = newPassword
 	user.UpdateTime = s.now()
 	s.users[id] = user
+	if err := s.persistLocked(); err != nil {
+		return err
+	}
 	return nil
+}
+
+func (s *Service) persistLocked() error {
+	if s.store == nil {
+		return nil
+	}
+	records := make([]platformstate.UserRecord, 0, len(s.users))
+	for _, user := range s.users {
+		records = append(records, platformstate.UserRecord{
+			ID:         user.ID,
+			Username:   user.Username,
+			Password:   user.Password,
+			Role:       user.Role,
+			Avatar:     user.Avatar,
+			CreateTime: user.CreateTime,
+			UpdateTime: user.UpdateTime,
+		})
+	}
+	sort.Slice(records, func(i, j int) bool {
+		return records[i].CreateTime.Before(records[j].CreateTime)
+	})
+	return s.store.Save(platformstate.Snapshot{Users: records})
 }
 
 func (s *Service) usernameExistsLocked(username, excludeID string) bool {

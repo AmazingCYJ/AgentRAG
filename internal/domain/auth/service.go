@@ -39,7 +39,7 @@ type Service struct {
 // NewService 基于配置创建认证服务。
 func NewService(cfg appconfig.AuthConfig, userService *domainusermgmt.Service) *Service {
 	if userService == nil {
-		userService = domainusermgmt.NewService(cfg)
+		userService = domainusermgmt.NewService(cfg, nil)
 	}
 
 	return &Service{
