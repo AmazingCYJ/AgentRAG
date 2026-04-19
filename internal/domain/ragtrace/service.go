@@ -188,6 +188,21 @@ func (s *Service) ListNodes(traceID string) ([]Node, error) {
 	return s.copyNodesLocked(traceID), nil
 }
 
+// SnapshotRuns 返回全部链路运行记录快照。
+func (s *Service) SnapshotRuns() []Run {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	result := make([]Run, 0, len(s.runs))
+	for _, run := range s.runs {
+		result = append(result, run)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].StartTime.After(result[j].StartTime)
+	})
+	return result
+}
+
 // RecordChatTrace 写入一次聊天运行记录。
 func (s *Service) RecordChatTrace(record ChatTraceRecord) string {
 	traceID := "trace_" + s.newID()

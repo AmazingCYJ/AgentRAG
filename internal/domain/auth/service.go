@@ -3,6 +3,7 @@ package auth
 import (
 	"errors"
 	"strings"
+	"sync"
 
 	domainuser "github.com/AmazingCYJ/AgentRAG/internal/domain/user"
 	platformauth "github.com/AmazingCYJ/AgentRAG/internal/platform/auth"
@@ -14,6 +15,10 @@ var (
 	ErrInvalidCredentials = errors.New("用户名或密码错误")
 	// ErrUnauthorized 表示当前请求没有有效登录态。
 	ErrUnauthorized = errors.New("未登录")
+	// ErrInvalidCurrentPassword 表示当前密码不正确。
+	ErrInvalidCurrentPassword = errors.New("当前密码错误")
+	// ErrNewPasswordRequired 表示新密码不能为空。
+	ErrNewPasswordRequired = errors.New("新密码不能为空")
 )
 
 // LoginResult 定义登录成功后的返回载荷。
@@ -27,6 +32,7 @@ type LoginResult struct {
 
 // Service 提供当前阶段最小可用的认证能力。
 type Service struct {
+	mu           sync.RWMutex
 	bootstrap    domainuser.User
 	tokenManager *platformauth.TokenManager
 }
@@ -61,6 +67,9 @@ func NewService(cfg appconfig.AuthConfig) *Service {
 
 // Login 校验当前阶段引导账号并签发令牌。
 func (s *Service) Login(username, password string) (*LoginResult, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	if !strings.EqualFold(strings.TrimSpace(username), s.bootstrap.Username) || password != s.bootstrap.Password {
 		return nil, ErrInvalidCredentials
 	}
@@ -90,4 +99,19 @@ func (s *Service) CurrentUser(token string) (*domainuser.Profile, error) {
 		Avatar:   claims.Avatar,
 	}
 	return &profile, nil
+}
+
+// ChangePassword 修改引导账号密码。
+func (s *Service) ChangePassword(currentPassword, newPassword string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.bootstrap.Password != currentPassword {
+		return ErrInvalidCurrentPassword
+	}
+	if strings.TrimSpace(newPassword) == "" {
+		return ErrNewPasswordRequired
+	}
+	s.bootstrap.Password = newPassword
+	return nil
 }

@@ -64,6 +64,14 @@ type Service struct {
 	messages map[string]map[string][]Message
 }
 
+// StatsSnapshot 定义会话统计快照。
+type StatsSnapshot struct {
+	TotalSessions  int
+	RecentSessions int
+	TotalMessages  int
+	RecentMessages int
+}
+
 // NewService 创建会话服务。
 func NewService() *Service {
 	return &Service{
@@ -220,4 +228,32 @@ func (s *Service) SubmitFeedback(messageID, userID string, vote int) error {
 		}
 	}
 	return ErrMessageNotFound
+}
+
+// StatsSnapshot 返回当前会话与消息统计。
+func (s *Service) StatsSnapshot() StatsSnapshot {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	cutoff := time.Now().Add(-24 * time.Hour)
+	result := StatsSnapshot{}
+	for _, sessionsByUser := range s.sessions {
+		for _, session := range sessionsByUser {
+			result.TotalSessions++
+			if session.LastTime.After(cutoff) {
+				result.RecentSessions++
+			}
+		}
+	}
+	for _, messagesByUser := range s.messages {
+		for _, messageList := range messagesByUser {
+			for _, message := range messageList {
+				result.TotalMessages++
+				if message.CreateTime.After(cutoff) {
+					result.RecentMessages++
+				}
+			}
+		}
+	}
+	return result
 }

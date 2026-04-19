@@ -4,6 +4,7 @@ import (
 	domainauth "github.com/AmazingCYJ/AgentRAG/internal/domain/auth"
 	domainchat "github.com/AmazingCYJ/AgentRAG/internal/domain/chat"
 	domainconversation "github.com/AmazingCYJ/AgentRAG/internal/domain/conversation"
+	domaindashboard "github.com/AmazingCYJ/AgentRAG/internal/domain/dashboard"
 	domainingestion "github.com/AmazingCYJ/AgentRAG/internal/domain/ingestion"
 	domainintenttree "github.com/AmazingCYJ/AgentRAG/internal/domain/intenttree"
 	domainknowledge "github.com/AmazingCYJ/AgentRAG/internal/domain/knowledge"
@@ -11,6 +12,7 @@ import (
 	domainragtrace "github.com/AmazingCYJ/AgentRAG/internal/domain/ragtrace"
 	domainsamplequestion "github.com/AmazingCYJ/AgentRAG/internal/domain/samplequestion"
 	domainsettings "github.com/AmazingCYJ/AgentRAG/internal/domain/settings"
+	domainusermgmt "github.com/AmazingCYJ/AgentRAG/internal/domain/usermgmt"
 	appconfig "github.com/AmazingCYJ/AgentRAG/internal/platform/config"
 	"github.com/AmazingCYJ/AgentRAG/internal/platform/httpx/handlers"
 	"github.com/gogf/gf/v2/frame/g"
@@ -21,6 +23,7 @@ type serverDeps struct {
 	authService           *domainauth.Service
 	chatService           *domainchat.Service
 	conversationService   *domainconversation.Service
+	dashboardService      *domaindashboard.Service
 	intentTreeService     *domainintenttree.Service
 	ingestionService      *domainingestion.Service
 	knowledgeService      *domainknowledge.Service
@@ -28,6 +31,7 @@ type serverDeps struct {
 	ragTraceService       *domainragtrace.Service
 	settingsService       *domainsettings.Service
 	sampleQuestionService *domainsamplequestion.Service
+	userService           *domainusermgmt.Service
 }
 
 // NewServer 构造当前阶段的最小 HTTP 服务，并注册基础路由。
@@ -53,9 +57,17 @@ func newServerWithDeps(cfg *appconfig.Config, name string, deps serverDeps) *ght
 	if conversationService == nil {
 		conversationService = domainconversation.NewService()
 	}
+	userService := deps.userService
+	if userService == nil {
+		userService = domainusermgmt.NewService(cfg.Auth)
+	}
 	ragTraceService := deps.ragTraceService
 	if ragTraceService == nil {
 		ragTraceService = domainragtrace.NewService()
+	}
+	dashboardService := deps.dashboardService
+	if dashboardService == nil {
+		dashboardService = domaindashboard.NewService(userService, conversationService, ragTraceService)
 	}
 	chatService := deps.chatService
 	if chatService == nil {
@@ -88,6 +100,7 @@ func newServerWithDeps(cfg *appconfig.Config, name string, deps serverDeps) *ght
 	authHandler := handlers.NewAuthHandler(authService)
 	chatHandler := handlers.NewChatHandler(authService, chatService)
 	conversationHandler := handlers.NewConversationHandler(authService, conversationService)
+	dashboardHandler := handlers.NewDashboardHandler(authService, dashboardService)
 	intentTreeHandler := handlers.NewIntentTreeHandler(authService, intentTreeService)
 	ingestionPipelineHandler := handlers.NewIngestionPipelineHandler(authService, ingestionService)
 	ingestionTaskHandler := handlers.NewIngestionTaskHandler(authService, ingestionService)
@@ -98,10 +111,19 @@ func newServerWithDeps(cfg *appconfig.Config, name string, deps serverDeps) *ght
 	ragTraceHandler := handlers.NewRagTraceHandler(authService, ragTraceService)
 	settingsHandler := handlers.NewSettingsHandler(authService, settingsService)
 	sampleQuestionHandler := handlers.NewSampleQuestionHandler(authService, sampleQuestionService)
+	userAdminHandler := handlers.NewUserAdminHandler(authService, userService)
 	server.BindHandler("/health", handlers.Health)
 	server.BindHandler("/auth/login", authHandler.Login)
 	server.BindHandler("/auth/logout", authHandler.Logout)
 	server.BindHandler("/user/me", authHandler.CurrentUser)
+	server.BindHandler("PUT:/user/password", userAdminHandler.ChangePassword)
+	server.BindHandler("GET:/users", userAdminHandler.Page)
+	server.BindHandler("POST:/users", userAdminHandler.Create)
+	server.BindHandler("PUT:/users/{id}", userAdminHandler.Update)
+	server.BindHandler("DELETE:/users/{id}", userAdminHandler.Delete)
+	server.BindHandler("GET:/admin/dashboard/overview", dashboardHandler.Overview)
+	server.BindHandler("GET:/admin/dashboard/performance", dashboardHandler.Performance)
+	server.BindHandler("GET:/admin/dashboard/trends", dashboardHandler.Trends)
 	server.BindHandler("/rag/settings", settingsHandler.Get)
 	server.BindHandler("/rag/traces/runs", ragTraceHandler.PageRuns)
 	server.BindHandler("GET:/rag/traces/runs/{traceId}", ragTraceHandler.Detail)
