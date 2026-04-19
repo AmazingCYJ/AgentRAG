@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	platformstate "github.com/AmazingCYJ/AgentRAG/internal/platform/state"
 	"github.com/gogf/gf/v2/util/guid"
 )
 
@@ -152,18 +153,102 @@ type Service struct {
 	nextPipelineNodeID int64
 	now                func() time.Time
 	newID              func() string
+	store              *platformstate.FileStore
 }
 
 // NewService 创建 Ingestion 服务。
-func NewService() *Service {
-	return &Service{
+func NewService(store *platformstate.FileStore) *Service {
+	service := &Service{
 		pipelines:          make(map[string]Pipeline),
 		tasks:              make(map[string]Task),
 		taskNodes:          make(map[string][]TaskNode),
 		nextPipelineNodeID: 1,
 		now:                time.Now,
 		newID:              func() string { return strings.ReplaceAll(guid.S(), "-", "") },
+		store:              store,
 	}
+	if snapshot, err := service.loadSnapshot(); err == nil {
+		for _, item := range snapshot.IngestionPipelines {
+			nodes := make([]PipelineNode, 0, len(item.Nodes))
+			for _, node := range item.Nodes {
+				nodes = append(nodes, PipelineNode{
+					ID:         node.ID,
+					NodeID:     node.NodeID,
+					NodeType:   node.NodeType,
+					Settings:   cloneMap(node.Settings),
+					Condition:  cloneMap(node.Condition),
+					NextNodeID: node.NextNodeID,
+				})
+				if node.ID >= service.nextPipelineNodeID {
+					service.nextPipelineNodeID = node.ID + 1
+				}
+			}
+			service.pipelines[item.ID] = Pipeline{
+				ID:          item.ID,
+				Name:        item.Name,
+				Description: item.Description,
+				CreatedBy:   item.CreatedBy,
+				Nodes:       nodes,
+				CreateTime:  item.CreateTime,
+				UpdateTime:  item.UpdateTime,
+			}
+		}
+		for _, item := range snapshot.IngestionTasks {
+			logs := make([]TaskLog, 0, len(item.Logs))
+			for _, log := range item.Logs {
+				logs = append(logs, TaskLog{
+					NodeID:     log.NodeID,
+					NodeType:   log.NodeType,
+					Message:    log.Message,
+					DurationMs: log.DurationMs,
+					Success:    log.Success,
+					Error:      log.Error,
+				})
+			}
+			service.tasks[item.ID] = Task{
+				ID:             item.ID,
+				PipelineID:     item.PipelineID,
+				SourceType:     item.SourceType,
+				SourceLocation: item.SourceLocation,
+				SourceFileName: item.SourceFileName,
+				Status:         item.Status,
+				ChunkCount:     item.ChunkCount,
+				ErrorMessage:   item.ErrorMessage,
+				Logs:           logs,
+				Metadata:       cloneMap(item.Metadata),
+				StartedAt:      item.StartedAt,
+				CompletedAt:    item.CompletedAt,
+				CreatedBy:      item.CreatedBy,
+				CreateTime:     item.CreateTime,
+				UpdateTime:     item.UpdateTime,
+			}
+		}
+		for _, item := range snapshot.IngestionTaskNodes {
+			service.taskNodes[item.TaskID] = append(service.taskNodes[item.TaskID], TaskNode{
+				ID:           item.ID,
+				TaskID:       item.TaskID,
+				PipelineID:   item.PipelineID,
+				NodeID:       item.NodeID,
+				NodeType:     item.NodeType,
+				NodeOrder:    item.NodeOrder,
+				Status:       item.Status,
+				DurationMs:   item.DurationMs,
+				Message:      item.Message,
+				ErrorMessage: item.ErrorMessage,
+				Output:       cloneMap(item.Output),
+				CreateTime:   item.CreateTime,
+				UpdateTime:   item.UpdateTime,
+			})
+		}
+	}
+	return service
+}
+
+func (s *Service) loadSnapshot() (platformstate.Snapshot, error) {
+	if s.store == nil {
+		return platformstate.Snapshot{}, nil
+	}
+	return s.store.Load()
 }
 
 // CreatePipeline 创建流水线。
@@ -188,6 +273,9 @@ func (s *Service) CreatePipeline(req PipelineSaveRequest) (Pipeline, error) {
 
 	pipeline.Nodes = s.buildPipelineNodesLocked(req.Nodes)
 	s.pipelines[pipeline.ID] = pipeline
+	if err := s.persistLocked(); err != nil {
+		return Pipeline{}, err
+	}
 	return pipeline, nil
 }
 
@@ -210,6 +298,9 @@ func (s *Service) UpdatePipeline(id string, req PipelineSaveRequest) (Pipeline, 
 	pipeline.Nodes = s.buildPipelineNodesLocked(req.Nodes)
 	pipeline.UpdateTime = s.now()
 	s.pipelines[id] = pipeline
+	if err := s.persistLocked(); err != nil {
+		return Pipeline{}, err
+	}
 	return pipeline, nil
 }
 
@@ -253,6 +344,9 @@ func (s *Service) DeletePipeline(id string) error {
 		return ErrPipelineNotFound
 	}
 	delete(s.pipelines, id)
+	if err := s.persistLocked(); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -271,7 +365,11 @@ func (s *Service) CreateTask(req TaskCreateRequest) (IngestionResult, error) {
 		return IngestionResult{}, ErrPipelineNotFound
 	}
 
-	return s.createTaskLocked(pipeline, req), nil
+	result := s.createTaskLocked(pipeline, req)
+	if err := s.persistLocked(); err != nil {
+		return IngestionResult{}, err
+	}
+	return result, nil
 }
 
 // UploadTask 上传文件并执行任务。
@@ -296,7 +394,11 @@ func (s *Service) UploadTask(pipelineID, fileName string, fileSize int64, create
 		},
 		CreatedBy: createdBy,
 	}
-	return s.createTaskLocked(pipeline, req), nil
+	result := s.createTaskLocked(pipeline, req)
+	if err := s.persistLocked(); err != nil {
+		return IngestionResult{}, err
+	}
+	return result, nil
 }
 
 // GetTask 获取任务详情。
@@ -515,4 +617,97 @@ func maxInt(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func (s *Service) persistLocked() error {
+	if s.store == nil {
+		return nil
+	}
+	pipelineRecords := make([]platformstate.IngestionPipelineRecord, 0, len(s.pipelines))
+	for _, pipeline := range s.pipelines {
+		nodeRecords := make([]platformstate.IngestionPipelineNodeRecord, 0, len(pipeline.Nodes))
+		for _, node := range pipeline.Nodes {
+			nodeRecords = append(nodeRecords, platformstate.IngestionPipelineNodeRecord{
+				ID:         node.ID,
+				NodeID:     node.NodeID,
+				NodeType:   node.NodeType,
+				Settings:   cloneMap(node.Settings),
+				Condition:  cloneMap(node.Condition),
+				NextNodeID: node.NextNodeID,
+			})
+		}
+		pipelineRecords = append(pipelineRecords, platformstate.IngestionPipelineRecord{
+			ID:          pipeline.ID,
+			Name:        pipeline.Name,
+			Description: pipeline.Description,
+			CreatedBy:   pipeline.CreatedBy,
+			Nodes:       nodeRecords,
+			CreateTime:  pipeline.CreateTime,
+			UpdateTime:  pipeline.UpdateTime,
+		})
+	}
+	taskRecords := make([]platformstate.IngestionTaskRecord, 0, len(s.tasks))
+	for _, task := range s.tasks {
+		logRecords := make([]platformstate.IngestionTaskLogRecord, 0, len(task.Logs))
+		for _, log := range task.Logs {
+			logRecords = append(logRecords, platformstate.IngestionTaskLogRecord{
+				NodeID:     log.NodeID,
+				NodeType:   log.NodeType,
+				Message:    log.Message,
+				DurationMs: log.DurationMs,
+				Success:    log.Success,
+				Error:      log.Error,
+			})
+		}
+		taskRecords = append(taskRecords, platformstate.IngestionTaskRecord{
+			ID:             task.ID,
+			PipelineID:     task.PipelineID,
+			SourceType:     task.SourceType,
+			SourceLocation: task.SourceLocation,
+			SourceFileName: task.SourceFileName,
+			Status:         task.Status,
+			ChunkCount:     task.ChunkCount,
+			ErrorMessage:   task.ErrorMessage,
+			Logs:           logRecords,
+			Metadata:       cloneMap(task.Metadata),
+			StartedAt:      task.StartedAt,
+			CompletedAt:    task.CompletedAt,
+			CreatedBy:      task.CreatedBy,
+			CreateTime:     task.CreateTime,
+			UpdateTime:     task.UpdateTime,
+		})
+	}
+	taskNodeRecords := make([]platformstate.IngestionTaskNodeRecord, 0)
+	for _, nodes := range s.taskNodes {
+		for _, node := range nodes {
+			taskNodeRecords = append(taskNodeRecords, platformstate.IngestionTaskNodeRecord{
+				ID:           node.ID,
+				TaskID:       node.TaskID,
+				PipelineID:   node.PipelineID,
+				NodeID:       node.NodeID,
+				NodeType:     node.NodeType,
+				NodeOrder:    node.NodeOrder,
+				Status:       node.Status,
+				DurationMs:   node.DurationMs,
+				Message:      node.Message,
+				ErrorMessage: node.ErrorMessage,
+				Output:       cloneMap(node.Output),
+				CreateTime:   node.CreateTime,
+				UpdateTime:   node.UpdateTime,
+			})
+		}
+	}
+	sort.Slice(pipelineRecords, func(i, j int) bool { return pipelineRecords[i].CreateTime.Before(pipelineRecords[j].CreateTime) })
+	sort.Slice(taskRecords, func(i, j int) bool { return taskRecords[i].CreateTime.After(taskRecords[j].CreateTime) })
+	sort.Slice(taskNodeRecords, func(i, j int) bool {
+		if taskNodeRecords[i].TaskID == taskNodeRecords[j].TaskID {
+			return taskNodeRecords[i].NodeOrder < taskNodeRecords[j].NodeOrder
+		}
+		return taskNodeRecords[i].TaskID < taskNodeRecords[j].TaskID
+	})
+	return s.store.Update(func(snapshot *platformstate.Snapshot) {
+		snapshot.IngestionPipelines = pipelineRecords
+		snapshot.IngestionTasks = taskRecords
+		snapshot.IngestionTaskNodes = taskNodeRecords
+	})
 }

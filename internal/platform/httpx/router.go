@@ -67,11 +67,11 @@ func newServerWithDeps(cfg *appconfig.Config, name string, deps serverDeps) *ght
 	}
 	conversationService := deps.conversationService
 	if conversationService == nil {
-		conversationService = domainconversation.NewService()
+		conversationService = domainconversation.NewService(stateStore)
 	}
 	ragTraceService := deps.ragTraceService
 	if ragTraceService == nil {
-		ragTraceService = domainragtrace.NewService()
+		ragTraceService = domainragtrace.NewService(stateStore)
 	}
 	dashboardService := deps.dashboardService
 	if dashboardService == nil {
@@ -87,7 +87,7 @@ func newServerWithDeps(cfg *appconfig.Config, name string, deps serverDeps) *ght
 	}
 	ingestionService := deps.ingestionService
 	if ingestionService == nil {
-		ingestionService = domainingestion.NewService()
+		ingestionService = domainingestion.NewService(stateStore)
 	}
 	knowledgeService := deps.knowledgeService
 	if knowledgeService == nil {

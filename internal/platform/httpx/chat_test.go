@@ -22,7 +22,7 @@ type sseEvent struct {
 }
 
 func TestChatStreamCreatesConversationAndEmitsFinishEvents(t *testing.T) {
-	conversationService := domainconversation.NewService()
+	conversationService := domainconversation.NewService(nil)
 	server := startChatTestServer(t, conversationService)
 	defer server.Shutdown()
 
@@ -145,7 +145,7 @@ func TestChatStreamCreatesConversationAndEmitsFinishEvents(t *testing.T) {
 }
 
 func TestStopTaskCancelsStreamingResponse(t *testing.T) {
-	conversationService := domainconversation.NewService()
+	conversationService := domainconversation.NewService(nil)
 	server := startChatTestServer(t, conversationService)
 	defer server.Shutdown()
 

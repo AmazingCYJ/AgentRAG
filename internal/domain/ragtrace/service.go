@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	platformstate "github.com/AmazingCYJ/AgentRAG/internal/platform/state"
 	"github.com/gogf/gf/v2/util/guid"
 )
 
@@ -97,19 +98,65 @@ type Service struct {
 	nodes map[string][]Node
 
 	newID func() string
+	store *platformstate.FileStore
 }
 
 // NewService 创建 Trace 服务，并写入一条初始示例数据。
-func NewService() *Service {
+func NewService(store *platformstate.FileStore) *Service {
 	service := &Service{
 		runs:  make(map[string]Run),
 		nodes: make(map[string][]Node),
 		newID: func() string {
 			return strings.ReplaceAll(guid.S(), "-", "")
 		},
+		store: store,
 	}
-	service.seed()
+	if snapshot, err := service.loadSnapshot(); err == nil && len(snapshot.RagTraceRuns) > 0 {
+		for _, run := range snapshot.RagTraceRuns {
+			service.runs[run.TraceID] = Run{
+				TraceID:        run.TraceID,
+				TraceName:      run.TraceName,
+				EntryMethod:    run.EntryMethod,
+				ConversationID: run.ConversationID,
+				TaskID:         run.TaskID,
+				UserName:       run.UserName,
+				Username:       run.Username,
+				UserID:         run.UserID,
+				Status:         run.Status,
+				ErrorMessage:   run.ErrorMessage,
+				DurationMs:     run.DurationMs,
+				StartTime:      run.StartTime,
+				EndTime:        run.EndTime,
+			}
+		}
+		for _, node := range snapshot.RagTraceNodes {
+			service.nodes[node.TraceID] = append(service.nodes[node.TraceID], Node{
+				TraceID:      node.TraceID,
+				NodeID:       node.NodeID,
+				ParentNodeID: node.ParentNodeID,
+				Depth:        node.Depth,
+				NodeType:     node.NodeType,
+				NodeName:     node.NodeName,
+				ClassName:    node.ClassName,
+				MethodName:   node.MethodName,
+				Status:       node.Status,
+				ErrorMessage: node.ErrorMessage,
+				DurationMs:   node.DurationMs,
+				StartTime:    node.StartTime,
+				EndTime:      node.EndTime,
+			})
+		}
+	} else {
+		service.seed()
+	}
 	return service
+}
+
+func (s *Service) loadSnapshot() (platformstate.Snapshot, error) {
+	if s.store == nil {
+		return platformstate.Snapshot{}, nil
+	}
+	return s.store.Load()
 }
 
 // PageRuns 返回链路运行分页数据。
@@ -241,6 +288,7 @@ func (s *Service) RecordChatTrace(record ChatTraceRecord) string {
 
 	s.runs[traceID] = run
 	s.nodes[traceID] = nodes
+	_ = s.persistLocked()
 	return traceID
 }
 
@@ -299,6 +347,7 @@ func (s *Service) seed() {
 
 	s.runs[run.TraceID] = run
 	s.nodes[run.TraceID] = nodes
+	_ = s.persistLocked()
 }
 
 func matchRun(run Run, query RunQuery) bool {
@@ -428,4 +477,59 @@ func maxInt64(a, b int64) int64 {
 		return a
 	}
 	return b
+}
+
+func (s *Service) persistLocked() error {
+	if s.store == nil {
+		return nil
+	}
+	runRecords := make([]platformstate.RagTraceRunRecord, 0, len(s.runs))
+	for _, run := range s.runs {
+		runRecords = append(runRecords, platformstate.RagTraceRunRecord{
+			TraceID:        run.TraceID,
+			TraceName:      run.TraceName,
+			EntryMethod:    run.EntryMethod,
+			ConversationID: run.ConversationID,
+			TaskID:         run.TaskID,
+			UserName:       run.UserName,
+			Username:       run.Username,
+			UserID:         run.UserID,
+			Status:         run.Status,
+			ErrorMessage:   run.ErrorMessage,
+			DurationMs:     run.DurationMs,
+			StartTime:      run.StartTime,
+			EndTime:        run.EndTime,
+		})
+	}
+	nodeRecords := make([]platformstate.RagTraceNodeRecord, 0)
+	for _, nodes := range s.nodes {
+		for _, node := range nodes {
+			nodeRecords = append(nodeRecords, platformstate.RagTraceNodeRecord{
+				TraceID:      node.TraceID,
+				NodeID:       node.NodeID,
+				ParentNodeID: node.ParentNodeID,
+				Depth:        node.Depth,
+				NodeType:     node.NodeType,
+				NodeName:     node.NodeName,
+				ClassName:    node.ClassName,
+				MethodName:   node.MethodName,
+				Status:       node.Status,
+				ErrorMessage: node.ErrorMessage,
+				DurationMs:   node.DurationMs,
+				StartTime:    node.StartTime,
+				EndTime:      node.EndTime,
+			})
+		}
+	}
+	sort.Slice(runRecords, func(i, j int) bool { return runRecords[i].StartTime.After(runRecords[j].StartTime) })
+	sort.Slice(nodeRecords, func(i, j int) bool {
+		if nodeRecords[i].TraceID == nodeRecords[j].TraceID {
+			return nodeRecords[i].StartTime.Before(nodeRecords[j].StartTime)
+		}
+		return nodeRecords[i].TraceID < nodeRecords[j].TraceID
+	})
+	return s.store.Update(func(snapshot *platformstate.Snapshot) {
+		snapshot.RagTraceRuns = runRecords
+		snapshot.RagTraceNodes = nodeRecords
+	})
 }

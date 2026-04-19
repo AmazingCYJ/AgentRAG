@@ -11,7 +11,7 @@ import (
 )
 
 func TestRagTraceEndpointsExposeChatRunData(t *testing.T) {
-	conversationService := domainconversation.NewService()
+	conversationService := domainconversation.NewService(nil)
 	server := startChatTestServer(t, conversationService)
 	defer server.Shutdown()
 

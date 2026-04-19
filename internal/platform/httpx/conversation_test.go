@@ -14,7 +14,7 @@ import (
 )
 
 func TestListSessionsReturnsConversationsForAuthenticatedUser(t *testing.T) {
-	conversationService := domainconversation.NewService()
+	conversationService := domainconversation.NewService(nil)
 	conversationService.UpsertConversation(domainconversation.Session{
 		ConversationID: "c1",
 		UserID:         "u_admin",
@@ -87,7 +87,7 @@ func TestListSessionsReturnsConversationsForAuthenticatedUser(t *testing.T) {
 }
 
 func TestListMessagesReturnsConversationMessagesForAuthenticatedUser(t *testing.T) {
-	conversationService := domainconversation.NewService()
+	conversationService := domainconversation.NewService(nil)
 	conversationService.UpsertConversation(domainconversation.Session{
 		ConversationID: "c1",
 		UserID:         "u_admin",
@@ -174,7 +174,7 @@ func TestListMessagesReturnsConversationMessagesForAuthenticatedUser(t *testing.
 }
 
 func TestRenameSessionUpdatesConversationTitle(t *testing.T) {
-	conversationService := domainconversation.NewService()
+	conversationService := domainconversation.NewService(nil)
 	conversationService.UpsertConversation(domainconversation.Session{
 		ConversationID: "c1",
 		UserID:         "u_admin",
@@ -229,7 +229,7 @@ func TestRenameSessionUpdatesConversationTitle(t *testing.T) {
 }
 
 func TestDeleteSessionRemovesConversationAndMessages(t *testing.T) {
-	conversationService := domainconversation.NewService()
+	conversationService := domainconversation.NewService(nil)
 	conversationService.UpsertConversation(domainconversation.Session{
 		ConversationID: "c1",
 		UserID:         "u_admin",
@@ -289,7 +289,7 @@ func TestDeleteSessionRemovesConversationAndMessages(t *testing.T) {
 }
 
 func TestSubmitFeedbackUpdatesMessageVote(t *testing.T) {
-	conversationService := domainconversation.NewService()
+	conversationService := domainconversation.NewService(nil)
 	conversationService.UpsertConversation(domainconversation.Session{
 		ConversationID: "c1",
 		UserID:         "u_admin",

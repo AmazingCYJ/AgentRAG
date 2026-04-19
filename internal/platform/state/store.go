@@ -138,16 +138,145 @@ type KnowledgeChunkLogRecord struct {
 	CreateTime      time.Time `json:"createTime,omitempty"`
 }
 
+// ConversationSessionRecord 定义持久化到磁盘的会话记录。
+type ConversationSessionRecord struct {
+	ConversationID string    `json:"conversationId"`
+	UserID         string    `json:"userId"`
+	Title          string    `json:"title"`
+	LastTime       time.Time `json:"lastTime,omitempty"`
+}
+
+// ConversationMessageRecord 定义持久化到磁盘的消息记录。
+type ConversationMessageRecord struct {
+	ID               string    `json:"id"`
+	ConversationID   string    `json:"conversationId"`
+	UserID           string    `json:"userId"`
+	Role             string    `json:"role"`
+	Content          string    `json:"content"`
+	ThinkingContent  string    `json:"thinkingContent,omitempty"`
+	ThinkingDuration *int      `json:"thinkingDuration,omitempty"`
+	Vote             *int      `json:"vote,omitempty"`
+	CreateTime       time.Time `json:"createTime,omitempty"`
+}
+
+// RagTraceRunRecord 定义持久化到磁盘的 Trace 运行记录。
+type RagTraceRunRecord struct {
+	TraceID        string    `json:"traceId"`
+	TraceName      string    `json:"traceName,omitempty"`
+	EntryMethod    string    `json:"entryMethod,omitempty"`
+	ConversationID string    `json:"conversationId,omitempty"`
+	TaskID         string    `json:"taskId,omitempty"`
+	UserName       string    `json:"userName,omitempty"`
+	Username       string    `json:"username,omitempty"`
+	UserID         string    `json:"userId,omitempty"`
+	Status         string    `json:"status,omitempty"`
+	ErrorMessage   string    `json:"errorMessage,omitempty"`
+	DurationMs     int64     `json:"durationMs,omitempty"`
+	StartTime      time.Time `json:"startTime,omitempty"`
+	EndTime        time.Time `json:"endTime,omitempty"`
+}
+
+// RagTraceNodeRecord 定义持久化到磁盘的 Trace 节点记录。
+type RagTraceNodeRecord struct {
+	TraceID      string    `json:"traceId"`
+	NodeID       string    `json:"nodeId"`
+	ParentNodeID string    `json:"parentNodeId,omitempty"`
+	Depth        int       `json:"depth,omitempty"`
+	NodeType     string    `json:"nodeType,omitempty"`
+	NodeName     string    `json:"nodeName,omitempty"`
+	ClassName    string    `json:"className,omitempty"`
+	MethodName   string    `json:"methodName,omitempty"`
+	Status       string    `json:"status,omitempty"`
+	ErrorMessage string    `json:"errorMessage,omitempty"`
+	DurationMs   int64     `json:"durationMs,omitempty"`
+	StartTime    time.Time `json:"startTime,omitempty"`
+	EndTime      time.Time `json:"endTime,omitempty"`
+}
+
+// IngestionPipelineRecord 定义持久化到磁盘的流水线记录。
+type IngestionPipelineRecord struct {
+	ID          string                        `json:"id"`
+	Name        string                        `json:"name"`
+	Description string                        `json:"description,omitempty"`
+	CreatedBy   string                        `json:"createdBy,omitempty"`
+	Nodes       []IngestionPipelineNodeRecord `json:"nodes,omitempty"`
+	CreateTime  time.Time                     `json:"createTime,omitempty"`
+	UpdateTime  time.Time                     `json:"updateTime,omitempty"`
+}
+
+// IngestionPipelineNodeRecord 定义持久化到磁盘的流水线节点记录。
+type IngestionPipelineNodeRecord struct {
+	ID         int64          `json:"id"`
+	NodeID     string         `json:"nodeId"`
+	NodeType   string         `json:"nodeType"`
+	Settings   map[string]any `json:"settings,omitempty"`
+	Condition  map[string]any `json:"condition,omitempty"`
+	NextNodeID string         `json:"nextNodeId,omitempty"`
+}
+
+// IngestionTaskRecord 定义持久化到磁盘的采集任务记录。
+type IngestionTaskRecord struct {
+	ID             string                   `json:"id"`
+	PipelineID     string                   `json:"pipelineId"`
+	SourceType     string                   `json:"sourceType,omitempty"`
+	SourceLocation string                   `json:"sourceLocation,omitempty"`
+	SourceFileName string                   `json:"sourceFileName,omitempty"`
+	Status         string                   `json:"status,omitempty"`
+	ChunkCount     int                      `json:"chunkCount,omitempty"`
+	ErrorMessage   string                   `json:"errorMessage,omitempty"`
+	Logs           []IngestionTaskLogRecord `json:"logs,omitempty"`
+	Metadata       map[string]any           `json:"metadata,omitempty"`
+	StartedAt      time.Time                `json:"startedAt,omitempty"`
+	CompletedAt    time.Time                `json:"completedAt,omitempty"`
+	CreatedBy      string                   `json:"createdBy,omitempty"`
+	CreateTime     time.Time                `json:"createTime,omitempty"`
+	UpdateTime     time.Time                `json:"updateTime,omitempty"`
+}
+
+// IngestionTaskLogRecord 定义持久化到磁盘的任务日志记录。
+type IngestionTaskLogRecord struct {
+	NodeID     string `json:"nodeId"`
+	NodeType   string `json:"nodeType"`
+	Message    string `json:"message,omitempty"`
+	DurationMs int64  `json:"durationMs,omitempty"`
+	Success    bool   `json:"success"`
+	Error      string `json:"error,omitempty"`
+}
+
+// IngestionTaskNodeRecord 定义持久化到磁盘的任务节点记录。
+type IngestionTaskNodeRecord struct {
+	ID           string         `json:"id"`
+	TaskID       string         `json:"taskId"`
+	PipelineID   string         `json:"pipelineId"`
+	NodeID       string         `json:"nodeId"`
+	NodeType     string         `json:"nodeType"`
+	NodeOrder    int            `json:"nodeOrder,omitempty"`
+	Status       string         `json:"status,omitempty"`
+	DurationMs   int64          `json:"durationMs,omitempty"`
+	Message      string         `json:"message,omitempty"`
+	ErrorMessage string         `json:"errorMessage,omitempty"`
+	Output       map[string]any `json:"output,omitempty"`
+	CreateTime   time.Time      `json:"createTime,omitempty"`
+	UpdateTime   time.Time      `json:"updateTime,omitempty"`
+}
+
 // Snapshot 定义当前阶段状态快照。
 type Snapshot struct {
-	Users           []UserRecord              `json:"users,omitempty"`
-	SampleQuestions []SampleQuestionRecord    `json:"sampleQuestions,omitempty"`
-	QueryMappings   []QueryMappingRecord      `json:"queryMappings,omitempty"`
-	IntentNodes     []IntentNodeRecord        `json:"intentNodes,omitempty"`
-	KnowledgeBases  []KnowledgeBaseRecord     `json:"knowledgeBases,omitempty"`
-	KnowledgeDocs   []KnowledgeDocumentRecord `json:"knowledgeDocs,omitempty"`
-	KnowledgeChunks []KnowledgeChunkRecord    `json:"knowledgeChunks,omitempty"`
-	KnowledgeLogs   []KnowledgeChunkLogRecord `json:"knowledgeLogs,omitempty"`
+	Users                []UserRecord                `json:"users,omitempty"`
+	SampleQuestions      []SampleQuestionRecord      `json:"sampleQuestions,omitempty"`
+	QueryMappings        []QueryMappingRecord        `json:"queryMappings,omitempty"`
+	IntentNodes          []IntentNodeRecord          `json:"intentNodes,omitempty"`
+	KnowledgeBases       []KnowledgeBaseRecord       `json:"knowledgeBases,omitempty"`
+	KnowledgeDocs        []KnowledgeDocumentRecord   `json:"knowledgeDocs,omitempty"`
+	KnowledgeChunks      []KnowledgeChunkRecord      `json:"knowledgeChunks,omitempty"`
+	KnowledgeLogs        []KnowledgeChunkLogRecord   `json:"knowledgeLogs,omitempty"`
+	ConversationSessions []ConversationSessionRecord `json:"conversationSessions,omitempty"`
+	ConversationMessages []ConversationMessageRecord `json:"conversationMessages,omitempty"`
+	RagTraceRuns         []RagTraceRunRecord         `json:"ragTraceRuns,omitempty"`
+	RagTraceNodes        []RagTraceNodeRecord        `json:"ragTraceNodes,omitempty"`
+	IngestionPipelines   []IngestionPipelineRecord   `json:"ingestionPipelines,omitempty"`
+	IngestionTasks       []IngestionTaskRecord       `json:"ingestionTasks,omitempty"`
+	IngestionTaskNodes   []IngestionTaskNodeRecord   `json:"ingestionTaskNodes,omitempty"`
 }
 
 // FileStore 提供基于 JSON 文件的轻量持久化。
