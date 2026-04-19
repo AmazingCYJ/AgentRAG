@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	platformstate "github.com/AmazingCYJ/AgentRAG/internal/platform/state"
 	"github.com/gogf/gf/v2/util/guid"
 )
 
@@ -214,18 +215,104 @@ type Service struct {
 
 	now   func() time.Time
 	newID func() string
+	store *platformstate.FileStore
 }
 
 // NewService 创建知识库服务。
-func NewService() *Service {
-	return &Service{
+func NewService(store *platformstate.FileStore) *Service {
+	service := &Service{
 		knowledgeBases: make(map[string]KnowledgeBase),
 		documents:      make(map[string]KnowledgeDocument),
 		chunks:         make(map[string]KnowledgeChunk),
 		chunkLogs:      make(map[string][]KnowledgeDocumentChunkLog),
 		now:            time.Now,
 		newID:          func() string { return strings.ReplaceAll(guid.S(), "-", "") },
+		store:          store,
 	}
+	if snapshot, err := service.loadSnapshot(); err == nil {
+		for _, item := range snapshot.KnowledgeBases {
+			service.knowledgeBases[item.ID] = KnowledgeBase{
+				ID:             item.ID,
+				Name:           item.Name,
+				EmbeddingModel: item.EmbeddingModel,
+				CollectionName: item.CollectionName,
+				CreatedBy:      item.CreatedBy,
+				DocumentCount:  item.DocumentCount,
+				CreateTime:     item.CreateTime,
+				UpdateTime:     item.UpdateTime,
+			}
+		}
+		for _, item := range snapshot.KnowledgeDocs {
+			service.documents[item.ID] = KnowledgeDocument{
+				ID:              item.ID,
+				KBID:            item.KBID,
+				DocName:         item.DocName,
+				SourceType:      item.SourceType,
+				SourceLocation:  item.SourceLocation,
+				ScheduleEnabled: item.ScheduleEnabled,
+				ScheduleCron:    item.ScheduleCron,
+				Enabled:         item.Enabled,
+				ChunkCount:      item.ChunkCount,
+				FileURL:         item.FileURL,
+				FileType:        item.FileType,
+				FileSize:        item.FileSize,
+				ProcessMode:     item.ProcessMode,
+				ChunkStrategy:   item.ChunkStrategy,
+				ChunkConfig:     item.ChunkConfig,
+				PipelineID:      item.PipelineID,
+				Status:          item.Status,
+				CreatedBy:       item.CreatedBy,
+				UpdatedBy:       item.UpdatedBy,
+				CreateTime:      item.CreateTime,
+				UpdateTime:      item.UpdateTime,
+			}
+		}
+		for _, item := range snapshot.KnowledgeChunks {
+			service.chunks[item.ID] = KnowledgeChunk{
+				ID:          item.ID,
+				KBID:        item.KBID,
+				DocID:       item.DocID,
+				ChunkIndex:  item.ChunkIndex,
+				Content:     item.Content,
+				ContentHash: item.ContentHash,
+				CharCount:   item.CharCount,
+				TokenCount:  item.TokenCount,
+				Enabled:     item.Enabled,
+				CreateTime:  item.CreateTime,
+				UpdateTime:  item.UpdateTime,
+			}
+		}
+		for _, item := range snapshot.KnowledgeLogs {
+			service.chunkLogs[item.DocID] = append(service.chunkLogs[item.DocID], KnowledgeDocumentChunkLog{
+				ID:              item.ID,
+				DocID:           item.DocID,
+				Status:          item.Status,
+				ProcessMode:     item.ProcessMode,
+				ChunkStrategy:   item.ChunkStrategy,
+				PipelineID:      item.PipelineID,
+				PipelineName:    item.PipelineName,
+				ExtractDuration: item.ExtractDuration,
+				ChunkDuration:   item.ChunkDuration,
+				EmbedDuration:   item.EmbedDuration,
+				PersistDuration: item.PersistDuration,
+				OtherDuration:   item.OtherDuration,
+				TotalDuration:   item.TotalDuration,
+				ChunkCount:      item.ChunkCount,
+				ErrorMessage:    item.ErrorMessage,
+				StartTime:       item.StartTime,
+				EndTime:         item.EndTime,
+				CreateTime:      item.CreateTime,
+			})
+		}
+	}
+	return service
+}
+
+func (s *Service) loadSnapshot() (platformstate.Snapshot, error) {
+	if s.store == nil {
+		return platformstate.Snapshot{}, nil
+	}
+	return s.store.Load()
 }
 
 // ListChunkStrategies 返回支持的分块策略列表。
@@ -282,6 +369,9 @@ func (s *Service) CreateKnowledgeBase(req KnowledgeBaseCreateRequest) (string, e
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.knowledgeBases[id] = item
+	if err := s.persistLocked(); err != nil {
+		return "", err
+	}
 	return id, nil
 }
 
@@ -302,6 +392,9 @@ func (s *Service) UpdateKnowledgeBase(id string, req KnowledgeBaseUpdateRequest)
 	}
 	item.UpdateTime = s.now()
 	s.knowledgeBases[id] = item
+	if err := s.persistLocked(); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -325,6 +418,9 @@ func (s *Service) DeleteKnowledgeBase(id string) error {
 				delete(s.chunks, chunkID)
 			}
 		}
+	}
+	if err := s.persistLocked(); err != nil {
+		return err
 	}
 	return nil
 }
@@ -406,6 +502,9 @@ func (s *Service) UploadDocument(kbID string, req KnowledgeDocumentUploadRequest
 
 	kb.UpdateTime = now
 	s.knowledgeBases[kbID] = kb
+	if err := s.persistLocked(); err != nil {
+		return KnowledgeDocument{}, err
+	}
 	return item, nil
 }
 
@@ -460,6 +559,9 @@ func (s *Service) UpdateDocument(docID string, req KnowledgeDocumentUpdateReques
 	}
 	item.UpdateTime = s.now()
 	s.documents[docID] = item
+	if err := s.persistLocked(); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -511,6 +613,9 @@ func (s *Service) StartDocumentChunk(docID string) error {
 		CreateTime:      s.now(),
 	}
 	s.chunkLogs[docID] = append([]KnowledgeDocumentChunkLog{log}, s.chunkLogs[docID]...)
+	if err := s.persistLocked(); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -533,6 +638,9 @@ func (s *Service) DeleteDocument(docID string) error {
 	kb := s.knowledgeBases[item.KBID]
 	kb.UpdateTime = s.now()
 	s.knowledgeBases[item.KBID] = kb
+	if err := s.persistLocked(); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -668,7 +776,14 @@ func (s *Service) CreateChunk(docID string, req KnowledgeChunkCreateRequest) (Kn
 	if !ok {
 		return KnowledgeChunk{}, ErrDocumentNotFound
 	}
-	return s.createChunkLocked(doc, req)
+	chunk, err := s.createChunkLocked(doc, req)
+	if err != nil {
+		return KnowledgeChunk{}, err
+	}
+	if err := s.persistLocked(); err != nil {
+		return KnowledgeChunk{}, err
+	}
+	return chunk, nil
 }
 
 // UpdateChunk 更新 Chunk 内容。
@@ -696,6 +811,9 @@ func (s *Service) UpdateChunk(docID, chunkID string, req KnowledgeChunkUpdateReq
 	chunk.KBID = doc.KBID
 	chunk.UpdateTime = s.now()
 	s.chunks[chunkID] = chunk
+	if err := s.persistLocked(); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -713,6 +831,9 @@ func (s *Service) DeleteChunk(docID, chunkID string) error {
 	}
 	delete(s.chunks, chunkID)
 	s.updateDocumentChunkCountLocked(docID)
+	if err := s.persistLocked(); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -731,6 +852,9 @@ func (s *Service) ToggleChunk(docID, chunkID string, enabled bool) error {
 	chunk.Enabled = boolToInt(enabled)
 	chunk.UpdateTime = s.now()
 	s.chunks[chunkID] = chunk
+	if err := s.persistLocked(); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -759,6 +883,9 @@ func (s *Service) BatchToggleChunks(docID string, chunkIDs []string, enabled boo
 		chunk.Enabled = boolToInt(enabled)
 		chunk.UpdateTime = s.now()
 		s.chunks[id] = chunk
+	}
+	if err := s.persistLocked(); err != nil {
+		return err
 	}
 	return nil
 }
@@ -957,4 +1084,96 @@ func defaultText(value, fallback string) string {
 
 func ptrInt(value int) *int {
 	return &value
+}
+
+func (s *Service) persistLocked() error {
+	if s.store == nil {
+		return nil
+	}
+	baseRecords := make([]platformstate.KnowledgeBaseRecord, 0, len(s.knowledgeBases))
+	for _, item := range s.knowledgeBases {
+		baseRecords = append(baseRecords, platformstate.KnowledgeBaseRecord{
+			ID:             item.ID,
+			Name:           item.Name,
+			EmbeddingModel: item.EmbeddingModel,
+			CollectionName: item.CollectionName,
+			CreatedBy:      item.CreatedBy,
+			DocumentCount:  item.DocumentCount,
+			CreateTime:     item.CreateTime,
+			UpdateTime:     item.UpdateTime,
+		})
+	}
+	docRecords := make([]platformstate.KnowledgeDocumentRecord, 0, len(s.documents))
+	for _, item := range s.documents {
+		docRecords = append(docRecords, platformstate.KnowledgeDocumentRecord{
+			ID:              item.ID,
+			KBID:            item.KBID,
+			DocName:         item.DocName,
+			SourceType:      item.SourceType,
+			SourceLocation:  item.SourceLocation,
+			ScheduleEnabled: item.ScheduleEnabled,
+			ScheduleCron:    item.ScheduleCron,
+			Enabled:         item.Enabled,
+			ChunkCount:      item.ChunkCount,
+			FileURL:         item.FileURL,
+			FileType:        item.FileType,
+			FileSize:        item.FileSize,
+			ProcessMode:     item.ProcessMode,
+			ChunkStrategy:   item.ChunkStrategy,
+			ChunkConfig:     item.ChunkConfig,
+			PipelineID:      item.PipelineID,
+			Status:          item.Status,
+			CreatedBy:       item.CreatedBy,
+			UpdatedBy:       item.UpdatedBy,
+			CreateTime:      item.CreateTime,
+			UpdateTime:      item.UpdateTime,
+		})
+	}
+	chunkRecords := make([]platformstate.KnowledgeChunkRecord, 0, len(s.chunks))
+	for _, item := range s.chunks {
+		chunkRecords = append(chunkRecords, platformstate.KnowledgeChunkRecord{
+			ID:          item.ID,
+			KBID:        item.KBID,
+			DocID:       item.DocID,
+			ChunkIndex:  item.ChunkIndex,
+			Content:     item.Content,
+			ContentHash: item.ContentHash,
+			CharCount:   item.CharCount,
+			TokenCount:  item.TokenCount,
+			Enabled:     item.Enabled,
+			CreateTime:  item.CreateTime,
+			UpdateTime:  item.UpdateTime,
+		})
+	}
+	logRecords := make([]platformstate.KnowledgeChunkLogRecord, 0)
+	for _, logs := range s.chunkLogs {
+		for _, item := range logs {
+			logRecords = append(logRecords, platformstate.KnowledgeChunkLogRecord{
+				ID:              item.ID,
+				DocID:           item.DocID,
+				Status:          item.Status,
+				ProcessMode:     item.ProcessMode,
+				ChunkStrategy:   item.ChunkStrategy,
+				PipelineID:      item.PipelineID,
+				PipelineName:    item.PipelineName,
+				ExtractDuration: item.ExtractDuration,
+				ChunkDuration:   item.ChunkDuration,
+				EmbedDuration:   item.EmbedDuration,
+				PersistDuration: item.PersistDuration,
+				OtherDuration:   item.OtherDuration,
+				TotalDuration:   item.TotalDuration,
+				ChunkCount:      item.ChunkCount,
+				ErrorMessage:    item.ErrorMessage,
+				StartTime:       item.StartTime,
+				EndTime:         item.EndTime,
+				CreateTime:      item.CreateTime,
+			})
+		}
+	}
+	return s.store.Update(func(snapshot *platformstate.Snapshot) {
+		snapshot.KnowledgeBases = baseRecords
+		snapshot.KnowledgeDocs = docRecords
+		snapshot.KnowledgeChunks = chunkRecords
+		snapshot.KnowledgeLogs = logRecords
+	})
 }

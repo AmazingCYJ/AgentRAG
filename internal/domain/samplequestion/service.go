@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	platformstate "github.com/AmazingCYJ/AgentRAG/internal/platform/state"
 	"github.com/gogf/gf/v2/util/guid"
 )
 
@@ -52,12 +53,13 @@ type Service struct {
 
 	now   func() time.Time
 	newID func() string
+	store *platformstate.FileStore
 }
 
 // NewService 创建示例问题服务，并注入默认欢迎页数据。
-func NewService() *Service {
+func NewService(store *platformstate.FileStore) *Service {
 	now := time.Now()
-	return &Service{
+	service := &Service{
 		items: []Item{
 			{
 				ID:          compactID(guid.S()),
@@ -88,7 +90,29 @@ func NewService() *Service {
 		newID: func() string {
 			return compactID(guid.S())
 		},
+		store: store,
 	}
+	if snapshot, err := service.loadSnapshot(); err == nil && len(snapshot.SampleQuestions) > 0 {
+		service.items = make([]Item, 0, len(snapshot.SampleQuestions))
+		for _, record := range snapshot.SampleQuestions {
+			service.items = append(service.items, Item{
+				ID:          record.ID,
+				Title:       record.Title,
+				Description: record.Description,
+				Question:    record.Question,
+				CreateTime:  record.CreateTime,
+				UpdateTime:  record.UpdateTime,
+			})
+		}
+	}
+	return service
+}
+
+func (s *Service) loadSnapshot() (platformstate.Snapshot, error) {
+	if s.store == nil {
+		return platformstate.Snapshot{}, nil
+	}
+	return s.store.Load()
 }
 
 // ListWelcome 返回欢迎页所需的示例问题列表。
@@ -188,6 +212,9 @@ func (s *Service) Create(req SaveRequest) (string, error) {
 	defer s.mu.Unlock()
 
 	s.items = append([]Item{item}, s.items...)
+	if err := s.persistLocked(); err != nil {
+		return "", err
+	}
 	return item.ID, nil
 }
 
@@ -209,6 +236,9 @@ func (s *Service) Update(id string, req SaveRequest) error {
 		s.items[index].Description = strings.TrimSpace(req.Description)
 		s.items[index].Question = question
 		s.items[index].UpdateTime = s.now()
+		if err := s.persistLocked(); err != nil {
+			return err
+		}
 		return nil
 	}
 	return ErrQuestionNotFound
@@ -224,9 +254,32 @@ func (s *Service) Delete(id string) error {
 			continue
 		}
 		s.items = append(s.items[:index], s.items[index+1:]...)
+		if err := s.persistLocked(); err != nil {
+			return err
+		}
 		return nil
 	}
 	return ErrQuestionNotFound
+}
+
+func (s *Service) persistLocked() error {
+	if s.store == nil {
+		return nil
+	}
+	records := make([]platformstate.SampleQuestionRecord, 0, len(s.items))
+	for _, item := range s.items {
+		records = append(records, platformstate.SampleQuestionRecord{
+			ID:          item.ID,
+			Title:       item.Title,
+			Description: item.Description,
+			Question:    item.Question,
+			CreateTime:  item.CreateTime,
+			UpdateTime:  item.UpdateTime,
+		})
+	}
+	return s.store.Update(func(snapshot *platformstate.Snapshot) {
+		snapshot.SampleQuestions = records
+	})
 }
 
 func compactID(raw string) string {

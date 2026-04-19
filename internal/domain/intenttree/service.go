@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	platformstate "github.com/AmazingCYJ/AgentRAG/internal/platform/state"
 )
 
 var (
@@ -107,14 +109,51 @@ type Service struct {
 	mu     sync.RWMutex
 	nextID int64
 	nodes  map[int64]Node
+	store  *platformstate.FileStore
 }
 
 // NewService 创建意图树服务。
-func NewService() *Service {
-	return &Service{
+func NewService(store *platformstate.FileStore) *Service {
+	service := &Service{
 		nextID: 1,
 		nodes:  make(map[int64]Node),
+		store:  store,
 	}
+	if snapshot, err := service.loadSnapshot(); err == nil {
+		for _, record := range snapshot.IntentNodes {
+			service.nodes[record.ID] = Node{
+				ID:                  record.ID,
+				IntentCode:          record.IntentCode,
+				Name:                record.Name,
+				Level:               record.Level,
+				ParentCode:          record.ParentCode,
+				Description:         record.Description,
+				Examples:            normalizeExamples(record.Examples),
+				CollectionName:      record.CollectionName,
+				MCPToolID:           record.MCPToolID,
+				TopK:                cloneIntPointer(record.TopK),
+				Kind:                record.Kind,
+				SortOrder:           record.SortOrder,
+				Enabled:             record.Enabled,
+				PromptSnippet:       record.PromptSnippet,
+				PromptTemplate:      record.PromptTemplate,
+				ParamPromptTemplate: record.ParamPromptTemplate,
+				CreateTime:          record.CreateTime,
+				UpdateTime:          record.UpdateTime,
+			}
+			if record.ID >= service.nextID {
+				service.nextID = record.ID + 1
+			}
+		}
+	}
+	return service
+}
+
+func (s *Service) loadSnapshot() (platformstate.Snapshot, error) {
+	if s.store == nil {
+		return platformstate.Snapshot{}, nil
+	}
+	return s.store.Load()
 }
 
 // GetFullTree 返回完整意图树。
@@ -171,6 +210,9 @@ func (s *Service) CreateNode(req CreateRequest) (int64, error) {
 		UpdateTime:          now,
 	}
 	s.nodes[id] = node
+	if err := s.persistLocked(); err != nil {
+		return 0, err
+	}
 	return id, nil
 }
 
@@ -209,6 +251,9 @@ func (s *Service) UpdateNode(id int64, req UpdateRequest) error {
 	node.ParamPromptTemplate = strings.TrimSpace(req.ParamPromptTemplate)
 	node.UpdateTime = time.Now()
 	s.nodes[id] = node
+	if err := s.persistLocked(); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -221,6 +266,9 @@ func (s *Service) DeleteNode(id int64) error {
 		return ErrNodeNotFound
 	}
 	s.deleteNodeAndChildrenLocked(id)
+	if err := s.persistLocked(); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -244,6 +292,7 @@ func (s *Service) BatchDeleteNodes(ids []int64) {
 			s.deleteNodeAndChildrenLocked(id)
 		}
 	}
+	_ = s.persistLocked()
 }
 
 func (s *Service) batchUpdateEnabled(ids []int64, enabled int) {
@@ -259,6 +308,7 @@ func (s *Service) batchUpdateEnabled(ids []int64, enabled int) {
 		node.UpdateTime = time.Now()
 		s.nodes[id] = node
 	}
+	_ = s.persistLocked()
 }
 
 func (s *Service) deleteNodeAndChildrenLocked(id int64) {
@@ -391,4 +441,39 @@ func cloneIntPointer(value *int) *int {
 	}
 	v := *value
 	return &v
+}
+
+func (s *Service) persistLocked() error {
+	if s.store == nil {
+		return nil
+	}
+	records := make([]platformstate.IntentNodeRecord, 0, len(s.nodes))
+	for _, node := range s.nodes {
+		records = append(records, platformstate.IntentNodeRecord{
+			ID:                  node.ID,
+			IntentCode:          node.IntentCode,
+			Name:                node.Name,
+			Level:               node.Level,
+			ParentCode:          node.ParentCode,
+			Description:         node.Description,
+			Examples:            normalizeExamples(node.Examples),
+			CollectionName:      node.CollectionName,
+			MCPToolID:           node.MCPToolID,
+			TopK:                cloneIntPointer(node.TopK),
+			Kind:                node.Kind,
+			SortOrder:           node.SortOrder,
+			Enabled:             node.Enabled,
+			PromptSnippet:       node.PromptSnippet,
+			PromptTemplate:      node.PromptTemplate,
+			ParamPromptTemplate: node.ParamPromptTemplate,
+			CreateTime:          node.CreateTime,
+			UpdateTime:          node.UpdateTime,
+		})
+	}
+	sort.Slice(records, func(i, j int) bool {
+		return records[i].ID < records[j].ID
+	})
+	return s.store.Update(func(snapshot *platformstate.Snapshot) {
+		snapshot.IntentNodes = records
+	})
 }

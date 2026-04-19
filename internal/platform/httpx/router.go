@@ -83,7 +83,7 @@ func newServerWithDeps(cfg *appconfig.Config, name string, deps serverDeps) *ght
 	}
 	intentTreeService := deps.intentTreeService
 	if intentTreeService == nil {
-		intentTreeService = domainintenttree.NewService()
+		intentTreeService = domainintenttree.NewService(stateStore)
 	}
 	ingestionService := deps.ingestionService
 	if ingestionService == nil {
@@ -91,11 +91,11 @@ func newServerWithDeps(cfg *appconfig.Config, name string, deps serverDeps) *ght
 	}
 	knowledgeService := deps.knowledgeService
 	if knowledgeService == nil {
-		knowledgeService = domainknowledge.NewService()
+		knowledgeService = domainknowledge.NewService(stateStore)
 	}
 	queryMappingService := deps.queryMappingService
 	if queryMappingService == nil {
-		queryMappingService = domainquerymapping.NewService()
+		queryMappingService = domainquerymapping.NewService(stateStore)
 	}
 	settingsService := deps.settingsService
 	if settingsService == nil {
@@ -103,7 +103,7 @@ func newServerWithDeps(cfg *appconfig.Config, name string, deps serverDeps) *ght
 	}
 	sampleQuestionService := deps.sampleQuestionService
 	if sampleQuestionService == nil {
-		sampleQuestionService = domainsamplequestion.NewService()
+		sampleQuestionService = domainsamplequestion.NewService(stateStore)
 	}
 	authHandler := handlers.NewAuthHandler(authService)
 	chatHandler := handlers.NewChatHandler(authService, chatService)

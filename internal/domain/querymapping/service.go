@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	platformstate "github.com/AmazingCYJ/AgentRAG/internal/platform/state"
 	"github.com/gogf/gf/v2/util/guid"
 )
 
@@ -58,15 +59,40 @@ type Service struct {
 
 	now   func() time.Time
 	newID func() string
+	store *platformstate.FileStore
 }
 
 // NewService 创建映射规则服务。
-func NewService() *Service {
-	return &Service{
+func NewService(store *platformstate.FileStore) *Service {
+	service := &Service{
 		items: make(map[string]Item),
 		now:   time.Now,
 		newID: func() string { return strings.ReplaceAll(guid.S(), "-", "") },
+		store: store,
 	}
+	if snapshot, err := service.loadSnapshot(); err == nil {
+		for _, record := range snapshot.QueryMappings {
+			service.items[record.ID] = Item{
+				ID:         record.ID,
+				SourceTerm: record.SourceTerm,
+				TargetTerm: record.TargetTerm,
+				MatchType:  record.MatchType,
+				Priority:   record.Priority,
+				Enabled:    record.Enabled,
+				Remark:     record.Remark,
+				CreateTime: record.CreateTime,
+				UpdateTime: record.UpdateTime,
+			}
+		}
+	}
+	return service
+}
+
+func (s *Service) loadSnapshot() (platformstate.Snapshot, error) {
+	if s.store == nil {
+		return platformstate.Snapshot{}, nil
+	}
+	return s.store.Load()
 }
 
 // Page 返回分页结果。
@@ -159,6 +185,9 @@ func (s *Service) Create(req SaveRequest) (string, error) {
 	defer s.mu.Unlock()
 
 	s.items[item.ID] = item
+	if err := s.persistLocked(); err != nil {
+		return "", err
+	}
 	return item.ID, nil
 }
 
@@ -188,6 +217,9 @@ func (s *Service) Update(id string, req SaveRequest) error {
 	item.Remark = strings.TrimSpace(req.Remark)
 	item.UpdateTime = s.now()
 	s.items[id] = item
+	if err := s.persistLocked(); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -200,7 +232,39 @@ func (s *Service) Delete(id string) error {
 		return ErrMappingNotFound
 	}
 	delete(s.items, id)
+	if err := s.persistLocked(); err != nil {
+		return err
+	}
 	return nil
+}
+
+func (s *Service) persistLocked() error {
+	if s.store == nil {
+		return nil
+	}
+	records := make([]platformstate.QueryMappingRecord, 0, len(s.items))
+	for _, item := range s.items {
+		records = append(records, platformstate.QueryMappingRecord{
+			ID:         item.ID,
+			SourceTerm: item.SourceTerm,
+			TargetTerm: item.TargetTerm,
+			MatchType:  item.MatchType,
+			Priority:   item.Priority,
+			Enabled:    item.Enabled,
+			Remark:     item.Remark,
+			CreateTime: item.CreateTime,
+			UpdateTime: item.UpdateTime,
+		})
+	}
+	sort.Slice(records, func(i, j int) bool {
+		if records[i].Priority == records[j].Priority {
+			return records[i].CreateTime.Before(records[j].CreateTime)
+		}
+		return records[i].Priority < records[j].Priority
+	})
+	return s.store.Update(func(snapshot *platformstate.Snapshot) {
+		snapshot.QueryMappings = records
+	})
 }
 
 func normalizeMatchType(matchType int) int {
