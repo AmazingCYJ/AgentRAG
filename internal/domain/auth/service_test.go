@@ -17,7 +17,7 @@ func TestLoginRejectsUnknownUser(t *testing.T) {
 			Password: "admin123",
 			Role:     "admin",
 		},
-	})
+	}, nil)
 
 	_, err := service.Login("nobody", "bad-password")
 	if err == nil {
@@ -36,7 +36,7 @@ func TestLoginReturnsTokenForBootstrapUser(t *testing.T) {
 			Role:     "admin",
 			Avatar:   "https://example.com/avatar.png",
 		},
-	})
+	}, nil)
 
 	result, err := service.Login("admin", "admin123")
 	if err != nil {

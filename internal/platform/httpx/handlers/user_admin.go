@@ -118,7 +118,7 @@ func (h *UserAdminHandler) ChangePassword(r *ghttp.Request) {
 		resp.WriteError(r, http.StatusBadRequest, "400", "请求参数错误")
 		return
 	}
-	if err := h.authService.ChangePassword(req.CurrentPassword, req.NewPassword); err != nil {
+	if err := h.authService.ChangePassword(r.GetHeader("Authorization"), req.CurrentPassword, req.NewPassword); err != nil {
 		if errors.Is(err, domainauth.ErrInvalidCurrentPassword) || errors.Is(err, domainauth.ErrNewPasswordRequired) {
 			resp.WriteError(r, http.StatusBadRequest, "400", err.Error())
 			return

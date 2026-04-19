@@ -22,6 +22,10 @@ var (
 	ErrUsernameExists = errors.New("用户名已存在")
 	// ErrProtectedUser 表示默认管理员不可删除。
 	ErrProtectedUser = errors.New("默认管理员不可删除")
+	// ErrInvalidCurrentPassword 表示当前密码不正确。
+	ErrInvalidCurrentPassword = errors.New("当前密码错误")
+	// ErrNewPasswordRequired 表示新密码不能为空。
+	ErrNewPasswordRequired = errors.New("新密码不能为空")
 )
 
 // User 表示后台用户实体。
@@ -224,6 +228,52 @@ func (s *Service) Count() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return len(s.users)
+}
+
+// GetByID 根据用户ID查询用户。
+func (s *Service) GetByID(id string) (User, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	user, ok := s.users[id]
+	if !ok {
+		return User{}, ErrUserNotFound
+	}
+	return user, nil
+}
+
+// Authenticate 根据用户名和密码认证用户。
+func (s *Service) Authenticate(username, password string) (User, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	for _, user := range s.users {
+		if strings.EqualFold(user.Username, strings.TrimSpace(username)) && user.Password == password {
+			return user, true
+		}
+	}
+	return User{}, false
+}
+
+// ChangePassword 修改指定用户密码。
+func (s *Service) ChangePassword(id, currentPassword, newPassword string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	user, ok := s.users[id]
+	if !ok {
+		return ErrUserNotFound
+	}
+	if user.Password != currentPassword {
+		return ErrInvalidCurrentPassword
+	}
+	if strings.TrimSpace(newPassword) == "" {
+		return ErrNewPasswordRequired
+	}
+	user.Password = newPassword
+	user.UpdateTime = s.now()
+	s.users[id] = user
+	return nil
 }
 
 func (s *Service) usernameExistsLocked(username, excludeID string) bool {

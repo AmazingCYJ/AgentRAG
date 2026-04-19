@@ -3,9 +3,9 @@ package auth
 import (
 	"errors"
 	"strings"
-	"sync"
 
 	domainuser "github.com/AmazingCYJ/AgentRAG/internal/domain/user"
+	domainusermgmt "github.com/AmazingCYJ/AgentRAG/internal/domain/usermgmt"
 	platformauth "github.com/AmazingCYJ/AgentRAG/internal/platform/auth"
 	appconfig "github.com/AmazingCYJ/AgentRAG/internal/platform/config"
 )
@@ -32,57 +32,44 @@ type LoginResult struct {
 
 // Service 提供当前阶段最小可用的认证能力。
 type Service struct {
-	mu           sync.RWMutex
-	bootstrap    domainuser.User
+	userService  *domainusermgmt.Service
 	tokenManager *platformauth.TokenManager
 }
 
 // NewService 基于配置创建认证服务。
-func NewService(cfg appconfig.AuthConfig) *Service {
-	bootstrap := domainuser.User{
-		UserID:   cfg.Bootstrap.UserID,
-		Username: cfg.Bootstrap.Username,
-		Password: cfg.Bootstrap.Password,
-		Role:     cfg.Bootstrap.Role,
-		Avatar:   cfg.Bootstrap.Avatar,
-	}
-	if bootstrap.UserID == "" {
-		bootstrap.UserID = "u_admin"
-	}
-	if bootstrap.Username == "" {
-		bootstrap.Username = "admin"
-	}
-	if bootstrap.Password == "" {
-		bootstrap.Password = "admin123"
-	}
-	if bootstrap.Role == "" {
-		bootstrap.Role = "admin"
+func NewService(cfg appconfig.AuthConfig, userService *domainusermgmt.Service) *Service {
+	if userService == nil {
+		userService = domainusermgmt.NewService(cfg)
 	}
 
 	return &Service{
-		bootstrap:    bootstrap,
+		userService:  userService,
 		tokenManager: platformauth.NewTokenManager(cfg.JWTSecret, cfg.TokenTTL),
 	}
 }
 
 // Login 校验当前阶段引导账号并签发令牌。
 func (s *Service) Login(username, password string) (*LoginResult, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	if !strings.EqualFold(strings.TrimSpace(username), s.bootstrap.Username) || password != s.bootstrap.Password {
+	user, ok := s.userService.Authenticate(username, password)
+	if !ok {
 		return nil, ErrInvalidCredentials
 	}
-	token, err := s.tokenManager.Issue(s.bootstrap)
+	token, err := s.tokenManager.Issue(domainuser.User{
+		UserID:   user.ID,
+		Username: user.Username,
+		Password: user.Password,
+		Role:     user.Role,
+		Avatar:   user.Avatar,
+	})
 	if err != nil {
 		return nil, err
 	}
 	return &LoginResult{
-		UserID:   s.bootstrap.UserID,
-		Username: s.bootstrap.Username,
-		Role:     s.bootstrap.Role,
+		UserID:   user.ID,
+		Username: user.Username,
+		Role:     user.Role,
 		Token:    token,
-		Avatar:   s.bootstrap.Avatar,
+		Avatar:   user.Avatar,
 	}, nil
 }
 
@@ -101,17 +88,21 @@ func (s *Service) CurrentUser(token string) (*domainuser.Profile, error) {
 	return &profile, nil
 }
 
-// ChangePassword 修改引导账号密码。
-func (s *Service) ChangePassword(currentPassword, newPassword string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.bootstrap.Password != currentPassword {
+// ChangePassword 修改当前登录用户密码。
+func (s *Service) ChangePassword(token, currentPassword, newPassword string) error {
+	profile, err := s.CurrentUser(token)
+	if err != nil {
+		return ErrUnauthorized
+	}
+	err = s.userService.ChangePassword(profile.UserID, currentPassword, newPassword)
+	switch {
+	case errors.Is(err, domainusermgmt.ErrInvalidCurrentPassword):
 		return ErrInvalidCurrentPassword
-	}
-	if strings.TrimSpace(newPassword) == "" {
+	case errors.Is(err, domainusermgmt.ErrNewPasswordRequired):
 		return ErrNewPasswordRequired
+	case errors.Is(err, domainusermgmt.ErrUserNotFound):
+		return ErrUnauthorized
+	default:
+		return err
 	}
-	s.bootstrap.Password = newPassword
-	return nil
 }

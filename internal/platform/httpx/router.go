@@ -49,17 +49,17 @@ func newServerWithDeps(cfg *appconfig.Config, name string, deps serverDeps) *ght
 	if cfg != nil && cfg.HTTP.Port > 0 {
 		server.SetPort(cfg.HTTP.Port)
 	}
+	userService := deps.userService
+	if userService == nil {
+		userService = domainusermgmt.NewService(cfg.Auth)
+	}
 	authService := deps.authService
 	if authService == nil {
-		authService = domainauth.NewService(cfg.Auth)
+		authService = domainauth.NewService(cfg.Auth, userService)
 	}
 	conversationService := deps.conversationService
 	if conversationService == nil {
 		conversationService = domainconversation.NewService()
-	}
-	userService := deps.userService
-	if userService == nil {
-		userService = domainusermgmt.NewService(cfg.Auth)
 	}
 	ragTraceService := deps.ragTraceService
 	if ragTraceService == nil {
