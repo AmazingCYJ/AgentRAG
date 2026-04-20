@@ -17,7 +17,7 @@ const (
 	serverVersion     = "0.0.1"
 )
 
-// JSONRPCRequest 定义 JSON-RPC 2.0 请求结构。
+// JSONRPCRequest 定义 JSON-RPC 2.0 请求体。
 type JSONRPCRequest struct {
 	JSONRPC string         `json:"jsonrpc"`
 	ID      any            `json:"id,omitempty"`
@@ -25,7 +25,7 @@ type JSONRPCRequest struct {
 	Params  map[string]any `json:"params,omitempty"`
 }
 
-// JSONRPCResponse 定义 JSON-RPC 2.0 响应结构。
+// JSONRPCResponse 定义 JSON-RPC 2.0 响应体。
 type JSONRPCResponse struct {
 	JSONRPC string        `json:"jsonrpc"`
 	ID      any           `json:"id,omitempty"`
@@ -33,21 +33,20 @@ type JSONRPCResponse struct {
 	Error   *JSONRPCError `json:"error,omitempty"`
 }
 
-// JSONRPCError 定义 JSON-RPC 错误结构。
+// JSONRPCError 定义 JSON-RPC 错误对象。
 type JSONRPCError struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
 }
 
-// ToolDefinition 定义 MCP 工具描述。
+// ToolDefinition 定义 MCP 工具元信息。
 type ToolDefinition struct {
-	ToolID        string                  `json:"toolId"`
-	Description   string                  `json:"description"`
-	Parameters    map[string]ParameterDef `json:"parameters,omitempty"`
-	RequireUserID bool                    `json:"requireUserId"`
+	ToolID      string                  `json:"toolId"`
+	Description string                  `json:"description"`
+	Parameters  map[string]ParameterDef `json:"parameters,omitempty"`
 }
 
-// ParameterDef 定义单个工具参数。
+// ParameterDef 定义工具参数。
 type ParameterDef struct {
 	Description  string   `json:"description"`
 	Type         string   `json:"type"`
@@ -63,14 +62,14 @@ type ToolSchema struct {
 	InputSchema InputSchema `json:"inputSchema"`
 }
 
-// InputSchema 定义输入 schema。
+// InputSchema 定义工具输入 schema。
 type InputSchema struct {
 	Type       string                 `json:"type"`
 	Properties map[string]PropertyDef `json:"properties,omitempty"`
 	Required   []string               `json:"required,omitempty"`
 }
 
-// PropertyDef 定义 schema 属性。
+// PropertyDef 定义 schema 字段。
 type PropertyDef struct {
 	Type        string   `json:"type"`
 	Description string   `json:"description"`
@@ -83,7 +82,7 @@ type ToolRequest struct {
 	Parameters map[string]any
 }
 
-// ToolResponse 定义工具调用返回。
+// ToolResponse 定义工具调用响应。
 type ToolResponse struct {
 	Success      bool
 	ToolID       string
@@ -92,7 +91,7 @@ type ToolResponse struct {
 	ErrorMessage string
 }
 
-// ToolExecutor 定义 MCP 工具执行器接口。
+// ToolExecutor 定义工具执行器接口。
 type ToolExecutor interface {
 	Definition() ToolDefinition
 	Execute(request ToolRequest) ToolResponse
@@ -105,7 +104,9 @@ type Registry struct {
 
 // NewRegistry 创建默认工具注册表。
 func NewRegistry() *Registry {
-	registry := &Registry{executors: make(map[string]ToolExecutor)}
+	registry := &Registry{
+		executors: make(map[string]ToolExecutor),
+	}
 	for _, executor := range []ToolExecutor{
 		NewWeatherTool(),
 		NewTicketTool(),
@@ -211,16 +212,16 @@ func dispatch(registry *Registry, request JSONRPCRequest) *JSONRPCResponse {
 			return errorResponse(request.ID, methodNotFound, "Tool not found: "+toolName)
 		}
 		arguments := map[string]any{}
-		if rawArgs, ok := request.Params["arguments"].(map[string]any); ok {
-			arguments = rawArgs
+		if rawArguments, ok := request.Params["arguments"].(map[string]any); ok {
+			arguments = rawArguments
 		}
-		toolResponse := executor.Execute(ToolRequest{
+		result := executor.Execute(ToolRequest{
 			ToolID:     toolName,
 			Parameters: arguments,
 		})
-		text := toolResponse.TextResult
-		if text == "" && !toolResponse.Success {
-			text = toolResponse.ErrorMessage
+		text := result.TextResult
+		if text == "" && !result.Success {
+			text = result.ErrorMessage
 		}
 		return &JSONRPCResponse{
 			JSONRPC: jsonRPCVersion,
@@ -232,7 +233,7 @@ func dispatch(registry *Registry, request JSONRPCRequest) *JSONRPCResponse {
 						"text": text,
 					},
 				},
-				"isError": !toolResponse.Success,
+				"isError": !result.Success,
 			},
 		}
 	default:
