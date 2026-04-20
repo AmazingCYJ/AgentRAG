@@ -63,6 +63,7 @@ type taskHandle struct {
 type Service struct {
 	conversationService *domainconversation.Service
 	traceService        *domainragtrace.Service
+	generator           Generator
 
 	mu    sync.Mutex
 	tasks map[string]taskHandle
@@ -73,10 +74,19 @@ type Service struct {
 }
 
 // NewService 创建聊天服务。
-func NewService(conversationService *domainconversation.Service, traceService *domainragtrace.Service) *Service {
+func NewService(
+	conversationService *domainconversation.Service,
+	traceService *domainragtrace.Service,
+	generators ...Generator,
+) *Service {
+	var generator Generator = &fallbackGenerator{}
+	if len(generators) > 0 && generators[0] != nil {
+		generator = generators[0]
+	}
 	return &Service{
 		conversationService: conversationService,
 		traceService:        traceService,
+		generator:           generator,
 		tasks:               make(map[string]taskHandle),
 		now:                 time.Now,
 		newID: func() string {
@@ -131,9 +141,17 @@ func (s *Service) StreamChat(ctx context.Context, req StreamRequest, writer Even
 		return s.finishCanceled(writer, req, conversationID, taskID, title, "", "", startedAt)
 	}
 
-	thinkingContent := ""
-	if req.DeepThinking {
-		for _, chunk := range splitText(buildThinkingText(question), thinkingChunkSize) {
+	generated, err := s.generator.Generate(taskCtx, GenerateRequest{
+		Question:     question,
+		DeepThinking: req.DeepThinking,
+	})
+	if err != nil {
+		return err
+	}
+
+	thinkingContent := generated.Thinking
+	if req.DeepThinking && thinkingContent != "" {
+		for _, chunk := range splitText(thinkingContent, thinkingChunkSize) {
 			if err := s.waitFn(taskCtx, chunkDelay); err != nil {
 				return s.finishCanceled(writer, req, conversationID, taskID, title, "", thinkingContent, startedAt)
 			}
@@ -143,12 +161,11 @@ func (s *Service) StreamChat(ctx context.Context, req StreamRequest, writer Even
 			}); err != nil {
 				return err
 			}
-			thinkingContent += chunk
 		}
 	}
 
 	responseContent := ""
-	for _, chunk := range splitText(buildResponseText(question, req.DeepThinking), responseChunkSize) {
+	for _, chunk := range splitText(generated.Answer, responseChunkSize) {
 		if err := s.waitFn(taskCtx, chunkDelay); err != nil {
 			return s.finishCanceled(writer, req, conversationID, taskID, title, responseContent, thinkingContent, startedAt)
 		}

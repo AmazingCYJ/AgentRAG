@@ -6,6 +6,7 @@ import "time"
 type Config struct {
 	HTTP  HTTPConfig  `json:"http"`
 	Auth  AuthConfig  `json:"auth"`
+	AI    AIConfig    `json:"ai"`
 	State StateConfig `json:"state"`
 }
 
@@ -28,6 +29,16 @@ type BootstrapUserConfig struct {
 	Password string `json:"password"`
 	Role     string `json:"role"`
 	Avatar   string `json:"avatar"`
+}
+
+// AIConfig 定义当前阶段最小可用的聊天模型配置。
+type AIConfig struct {
+	APIKey            string        `json:"apiKey"`
+	BaseURL           string        `json:"baseUrl"`
+	Model             string        `json:"model"`
+	DeepThinkingModel string        `json:"deepThinkingModel"`
+	SystemPrompt      string        `json:"systemPrompt"`
+	Timeout           time.Duration `json:"timeout"`
 }
 
 // StateConfig 定义本地状态持久化配置。

@@ -9,5 +9,12 @@ auth:
     password: "admin123"
     role: "admin"
     avatar: ""
+ai:
+  apiKey: ""
+  baseUrl: "https://api.openai.com/v1"
+  model: ""
+  deepThinkingModel: ""
+  systemPrompt: "你是 AgentRAG 的智能问答助手，请使用简洁、专业、可执行的中文回答用户问题。"
+  timeout: "60s"
 state:
   file: "data/state.json"

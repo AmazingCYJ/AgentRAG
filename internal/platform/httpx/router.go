@@ -79,7 +79,11 @@ func newServerWithDeps(cfg *appconfig.Config, name string, deps serverDeps) *ght
 	}
 	chatService := deps.chatService
 	if chatService == nil {
-		chatService = domainchat.NewService(conversationService, ragTraceService)
+		chatService = domainchat.NewService(
+			conversationService,
+			ragTraceService,
+			domainchat.NewGeneratorFromConfig(cfg.AI),
+		)
 	}
 	intentTreeService := deps.intentTreeService
 	if intentTreeService == nil {
