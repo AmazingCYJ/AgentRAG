@@ -11,8 +11,9 @@ import (
 
 // GenerateRequest 定义聊天生成输入。
 type GenerateRequest struct {
-	Question     string
-	DeepThinking bool
+	Question         string
+	DeepThinking     bool
+	KnowledgeContext string
 }
 
 // GenerateResult 定义聊天生成输出。
@@ -25,6 +26,9 @@ type GenerateResult struct {
 type Generator interface {
 	Generate(ctx context.Context, req GenerateRequest) (GenerateResult, error)
 }
+
+// ContextRetriever 定义知识上下文检索函数。
+type ContextRetriever func(ctx context.Context, query string, limit int) (string, error)
 
 type fallbackGenerator struct{}
 
@@ -40,16 +44,19 @@ func (g *fallbackGenerator) Generate(_ context.Context, req GenerateRequest) (Ge
 }
 
 // NewGeneratorFromConfig 根据配置创建聊天生成器。
-func NewGeneratorFromConfig(cfg appconfig.AIConfig) Generator {
+func NewGeneratorFromConfig(cfg appconfig.AIConfig, retriever ContextRetriever) Generator {
+	var generator Generator
 	if strings.TrimSpace(cfg.APIKey) == "" || strings.TrimSpace(cfg.Model) == "" {
-		return &fallbackGenerator{}
+		generator = &fallbackGenerator{}
+	} else {
+		einoGenerator, err := NewEinoGenerator(cfg)
+		if err != nil {
+			generator = &fallbackGenerator{}
+		} else {
+			generator = einoGenerator
+		}
 	}
-
-	generator, err := NewEinoGenerator(cfg)
-	if err != nil {
-		return &fallbackGenerator{}
-	}
-	return generator
+	return wrapWithRetriever(generator, retriever, 4)
 }
 
 // EinoGenerator 基于 Eino OpenAI chat model 封装聊天生成。
@@ -100,8 +107,13 @@ func (g *EinoGenerator) Generate(ctx context.Context, req GenerateRequest) (Gene
 
 	messages := []*schema.Message{
 		schema.SystemMessage(g.systemPrompt),
-		schema.UserMessage(strings.TrimSpace(req.Question)),
 	}
+	if strings.TrimSpace(req.KnowledgeContext) != "" {
+		messages = append(messages, schema.SystemMessage(
+			"以下是从知识库检索到的上下文，请优先依据这些内容回答；如果信息不足，请明确说明。\n\n"+req.KnowledgeContext,
+		))
+	}
+	messages = append(messages, schema.UserMessage(strings.TrimSpace(req.Question)))
 	resp, err := model.Generate(ctx, messages)
 	if err != nil {
 		return GenerateResult{}, err
@@ -117,4 +129,35 @@ func defaultSystemPrompt(prompt string) string {
 		return "你是 AgentRAG 的智能问答助手，请使用简洁、专业、可执行的中文回答用户问题。"
 	}
 	return strings.TrimSpace(prompt)
+}
+
+type retrievalGenerator struct {
+	inner     Generator
+	retriever ContextRetriever
+	limit     int
+}
+
+func wrapWithRetriever(inner Generator, retriever ContextRetriever, limit int) Generator {
+	if inner == nil {
+		inner = &fallbackGenerator{}
+	}
+	if retriever == nil {
+		return inner
+	}
+	if limit <= 0 {
+		limit = 4
+	}
+	return &retrievalGenerator{
+		inner:     inner,
+		retriever: retriever,
+		limit:     limit,
+	}
+}
+
+func (g *retrievalGenerator) Generate(ctx context.Context, req GenerateRequest) (GenerateResult, error) {
+	contextText, err := g.retriever(ctx, req.Question, g.limit)
+	if err == nil {
+		req.KnowledgeContext = strings.TrimSpace(contextText)
+	}
+	return g.inner.Generate(ctx, req)
 }

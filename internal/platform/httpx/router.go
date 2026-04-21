@@ -77,12 +77,16 @@ func newServerWithDeps(cfg *appconfig.Config, name string, deps serverDeps) *ght
 	if dashboardService == nil {
 		dashboardService = domaindashboard.NewService(userService, conversationService, ragTraceService)
 	}
+	knowledgeService := deps.knowledgeService
+	if knowledgeService == nil {
+		knowledgeService = domainknowledge.NewService(stateStore)
+	}
 	chatService := deps.chatService
 	if chatService == nil {
 		chatService = domainchat.NewService(
 			conversationService,
 			ragTraceService,
-			domainchat.NewGeneratorFromConfig(cfg.AI),
+			domainchat.NewGeneratorFromConfig(cfg.AI, knowledgeService.BuildPromptContext),
 		)
 	}
 	intentTreeService := deps.intentTreeService
@@ -92,10 +96,6 @@ func newServerWithDeps(cfg *appconfig.Config, name string, deps serverDeps) *ght
 	ingestionService := deps.ingestionService
 	if ingestionService == nil {
 		ingestionService = domainingestion.NewService(stateStore)
-	}
-	knowledgeService := deps.knowledgeService
-	if knowledgeService == nil {
-		knowledgeService = domainknowledge.NewService(stateStore)
 	}
 	queryMappingService := deps.queryMappingService
 	if queryMappingService == nil {

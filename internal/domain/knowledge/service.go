@@ -1,9 +1,11 @@
 package knowledge
 
 import (
+	"context"
 	"errors"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -705,6 +707,66 @@ func (s *Service) SearchDocuments(keyword string, limit int) []KnowledgeDocument
 	return filtered
 }
 
+// BuildPromptContext 基于现有 Chunk 构建给大模型使用的检索上下文。
+func (s *Service) BuildPromptContext(_ context.Context, query string, limit int) (string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	needle := tokenize(query)
+	if len(needle) == 0 {
+		return "", nil
+	}
+
+	type scoredChunk struct {
+		docName string
+		content string
+		score   int
+	}
+
+	matches := make([]scoredChunk, 0)
+	for _, chunk := range s.chunks {
+		if chunk.Enabled == 0 {
+			continue
+		}
+		doc, ok := s.documents[chunk.DocID]
+		if !ok || !doc.Enabled {
+			continue
+		}
+		score := overlapScore(needle, tokenize(chunk.Content+" "+doc.DocName))
+		if score <= 0 {
+			continue
+		}
+		matches = append(matches, scoredChunk{
+			docName: doc.DocName,
+			content: chunk.Content,
+			score:   score,
+		})
+	}
+
+	sort.Slice(matches, func(i, j int) bool {
+		if matches[i].score == matches[j].score {
+			return matches[i].docName < matches[j].docName
+		}
+		return matches[i].score > matches[j].score
+	})
+
+	if limit <= 0 {
+		limit = 4
+	}
+	if len(matches) > limit {
+		matches = matches[:limit]
+	}
+	if len(matches) == 0 {
+		return "", nil
+	}
+
+	parts := make([]string, 0, len(matches))
+	for index, item := range matches {
+		parts = append(parts, "["+strconv.Itoa(index+1)+"] 文档《"+item.docName+"》\n"+item.content)
+	}
+	return strings.Join(parts, "\n\n"), nil
+}
+
 // EnableDocument 启用或禁用文档。
 func (s *Service) EnableDocument(docID string, enabled bool) error {
 	s.mu.Lock()
@@ -1084,6 +1146,54 @@ func defaultText(value, fallback string) string {
 
 func ptrInt(value int) *int {
 	return &value
+}
+
+func tokenize(text string) []string {
+	normalized := strings.ToLower(strings.TrimSpace(text))
+	fields := strings.FieldsFunc(normalized, func(r rune) bool {
+		return r == ' ' || r == '\n' || r == '\t' || r == '，' || r == '。' || r == '、' || r == ',' || r == '.' || r == ':' || r == '：'
+	})
+	result := make([]string, 0, len(fields)+16)
+	for _, field := range fields {
+		field = strings.TrimSpace(field)
+		if field != "" {
+			result = append(result, field)
+			appendNGrams(&result, []rune(field), 2)
+			appendNGrams(&result, []rune(field), 3)
+		}
+	}
+	if len(result) == 0 && normalized != "" {
+		result = append(result, normalized)
+		appendNGrams(&result, []rune(normalized), 2)
+		appendNGrams(&result, []rune(normalized), 3)
+	}
+	return result
+}
+
+func overlapScore(a, b []string) int {
+	if len(a) == 0 || len(b) == 0 {
+		return 0
+	}
+	bag := make(map[string]struct{}, len(b))
+	for _, item := range b {
+		bag[item] = struct{}{}
+	}
+	score := 0
+	for _, item := range a {
+		if _, ok := bag[item]; ok {
+			score++
+		}
+	}
+	return score
+}
+
+func appendNGrams(target *[]string, runes []rune, size int) {
+	if len(runes) < size || size <= 0 {
+		return
+	}
+	for i := 0; i <= len(runes)-size; i++ {
+		*target = append(*target, string(runes[i:i+size]))
+	}
 }
 
 func (s *Service) persistLocked() error {

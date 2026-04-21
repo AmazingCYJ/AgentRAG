@@ -20,9 +20,18 @@ func (w *fakeWriter) Event(name string, payload any) error {
 type fakeGenerator struct {
 	thinking string
 	answer   string
+	lastReq  GenerateRequest
 }
 
 func (g *fakeGenerator) Generate(_ context.Context, _ GenerateRequest) (GenerateResult, error) {
+	return GenerateResult{
+		Thinking: g.thinking,
+		Answer:   g.answer,
+	}, nil
+}
+
+func (g *fakeGenerator) GenerateWithCapture(_ context.Context, req GenerateRequest) (GenerateResult, error) {
+	g.lastReq = req
 	return GenerateResult{
 		Thinking: g.thinking,
 		Answer:   g.answer,
@@ -64,5 +73,43 @@ func TestStreamChatUsesConfiguredGeneratorOutput(t *testing.T) {
 	}
 	if messages[1].Content != "这是生成器回答内容" {
 		t.Fatalf("expected generator answer content, got %s", messages[1].Content)
+	}
+}
+
+type captureGenerator struct {
+	lastReq GenerateRequest
+}
+
+func (g *captureGenerator) Generate(_ context.Context, req GenerateRequest) (GenerateResult, error) {
+	g.lastReq = req
+	return GenerateResult{
+		Answer: "ok",
+	}, nil
+}
+
+func TestRetrievalGeneratorInjectsKnowledgeContext(t *testing.T) {
+	base := &captureGenerator{}
+	generator := wrapWithRetriever(base, func(_ context.Context, query string, limit int) (string, error) {
+		if query != "怎么配置请假流程" {
+			t.Fatalf("unexpected query %s", query)
+		}
+		if limit != 4 {
+			t.Fatalf("unexpected retrieval limit %d", limit)
+		}
+		return "文档《OA请假手册》：请先进入审批中心。", nil
+	}, 4)
+
+	_, err := generator.Generate(context.Background(), GenerateRequest{
+		Question:     "怎么配置请假流程",
+		DeepThinking: true,
+	})
+	if err != nil {
+		t.Fatalf("generate with retriever failed: %v", err)
+	}
+	if base.lastReq.KnowledgeContext == "" {
+		t.Fatal("expected knowledge context to be injected")
+	}
+	if base.lastReq.KnowledgeContext != "文档《OA请假手册》：请先进入审批中心。" {
+		t.Fatalf("unexpected knowledge context %s", base.lastReq.KnowledgeContext)
 	}
 }
