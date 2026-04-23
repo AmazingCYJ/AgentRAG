@@ -1,6 +1,7 @@
 package httpx
 
 import (
+	"context"
 	domainauth "github.com/AmazingCYJ/AgentRAG/internal/domain/auth"
 	domainchat "github.com/AmazingCYJ/AgentRAG/internal/domain/chat"
 	domainconversation "github.com/AmazingCYJ/AgentRAG/internal/domain/conversation"
@@ -13,6 +14,7 @@ import (
 	domainsamplequestion "github.com/AmazingCYJ/AgentRAG/internal/domain/samplequestion"
 	domainsettings "github.com/AmazingCYJ/AgentRAG/internal/domain/settings"
 	domainusermgmt "github.com/AmazingCYJ/AgentRAG/internal/domain/usermgmt"
+	"github.com/AmazingCYJ/AgentRAG/internal/mcpserver"
 	appconfig "github.com/AmazingCYJ/AgentRAG/internal/platform/config"
 	"github.com/AmazingCYJ/AgentRAG/internal/platform/httpx/handlers"
 	platformstate "github.com/AmazingCYJ/AgentRAG/internal/platform/state"
@@ -81,17 +83,46 @@ func newServerWithDeps(cfg *appconfig.Config, name string, deps serverDeps) *ght
 	if knowledgeService == nil {
 		knowledgeService = domainknowledge.NewService(stateStore)
 	}
-	chatService := deps.chatService
-	if chatService == nil {
-		chatService = domainchat.NewService(
-			conversationService,
-			ragTraceService,
-			domainchat.NewGeneratorFromConfig(cfg.AI, knowledgeService.BuildPromptContext),
-		)
-	}
 	intentTreeService := deps.intentTreeService
 	if intentTreeService == nil {
 		intentTreeService = domainintenttree.NewService(stateStore)
+	}
+	chatService := deps.chatService
+	if chatService == nil {
+		mcpRegistry := mcpserver.NewRegistry()
+		routeResolver := func(_ context.Context, question string) (domainchat.RouteDecision, error) {
+			hint := intentTreeService.MatchQuestion(question)
+			if hint.Score <= 0 {
+				return domainchat.RouteDecision{Kind: domainchat.RouteKindNone}, nil
+			}
+			if hint.Kind == 2 && strings.TrimSpace(hint.ToolID) != "" {
+				return domainchat.RouteDecision{
+					Kind:   domainchat.RouteKindTool,
+					ToolID: hint.ToolID,
+				}, nil
+			}
+			return domainchat.RouteDecision{Kind: domainchat.RouteKindKnowledge}, nil
+		}
+		toolCaller := func(_ context.Context, toolID, question string) (string, error) {
+			executor, ok := mcpRegistry.GetExecutor(toolID)
+			if !ok {
+				return "", nil
+			}
+			arguments := buildMCPToolArguments(toolID, question)
+			result := executor.Execute(mcpserver.ToolRequest{
+				ToolID:     toolID,
+				Parameters: arguments,
+			})
+			if !result.Success {
+				return result.ErrorMessage, nil
+			}
+			return result.TextResult, nil
+		}
+		chatService = domainchat.NewService(
+			conversationService,
+			ragTraceService,
+			domainchat.NewGeneratorFromConfig(cfg.AI, knowledgeService.BuildPromptContext, routeResolver, toolCaller),
+		)
 	}
 	ingestionService := deps.ingestionService
 	if ingestionService == nil {
@@ -197,4 +228,66 @@ func newServerWithDeps(cfg *appconfig.Config, name string, deps serverDeps) *ght
 	server.BindHandler("GET:/rag/v3/chat", chatHandler.StreamChat)
 	server.BindHandler("POST:/rag/v3/stop", chatHandler.Stop)
 	return server
+}
+
+func buildMCPToolArguments(toolID, question string) map[string]any {
+	args := map[string]any{}
+	switch toolID {
+	case "weather_query":
+		args["city"] = detectCity(question)
+		if strings.Contains(question, "预报") || strings.Contains(question, "明天") || strings.Contains(question, "后天") || strings.Contains(question, "未来") {
+			args["queryType"] = "forecast"
+		} else {
+			args["queryType"] = "current"
+		}
+	case "ticket_query":
+		args["region"] = detectRegion(question)
+		if strings.Contains(question, "列表") {
+			args["queryType"] = "list"
+		} else if strings.Contains(question, "统计") || strings.Contains(question, "分析") {
+			args["queryType"] = "stats"
+		} else {
+			args["queryType"] = "summary"
+		}
+	case "sales_query":
+		args["region"] = detectRegion(question)
+		if strings.Contains(question, "排名") {
+			args["queryType"] = "ranking"
+		} else if strings.Contains(question, "趋势") {
+			args["queryType"] = "trend"
+		} else if strings.Contains(question, "明细") {
+			args["queryType"] = "detail"
+		} else {
+			args["queryType"] = "summary"
+		}
+		args["period"] = detectPeriod(question)
+	}
+	return args
+}
+
+func detectCity(question string) string {
+	for _, city := range []string{"北京", "上海", "广州", "深圳", "杭州", "成都", "武汉", "南京", "西安", "重庆", "长沙", "天津", "苏州", "郑州", "青岛", "大连", "厦门", "昆明", "哈尔滨", "三亚"} {
+		if strings.Contains(question, city) {
+			return city
+		}
+	}
+	return "北京"
+}
+
+func detectRegion(question string) string {
+	for _, region := range []string{"华东", "华南", "华北", "西南", "西北"} {
+		if strings.Contains(question, region) {
+			return region
+		}
+	}
+	return "华东"
+}
+
+func detectPeriod(question string) string {
+	for _, period := range []string{"本月", "上月", "本季度", "上季度", "本年"} {
+		if strings.Contains(question, period) {
+			return period
+		}
+	}
+	return "本月"
 }

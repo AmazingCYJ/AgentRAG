@@ -104,6 +104,14 @@ type UpdateRequest struct {
 	ParamPromptTemplate string
 }
 
+// RouteHint 定义意图树返回的最小路由结果。
+type RouteHint struct {
+	Kind           int
+	ToolID         string
+	CollectionName string
+	Score          int
+}
+
 // Service 提供意图树内存管理能力。
 type Service struct {
 	mu     sync.RWMutex
@@ -162,6 +170,45 @@ func (s *Service) GetFullTree() []TreeNode {
 	defer s.mu.RUnlock()
 
 	return buildTree(s.nodes)
+}
+
+// MatchQuestion 根据问题匹配最可能的意图节点。
+func (s *Service) MatchQuestion(question string) RouteHint {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	query := strings.TrimSpace(question)
+	if query == "" {
+		return RouteHint{}
+	}
+	queryTokens := buildIntentTokens(query)
+	best := RouteHint{}
+	for _, node := range s.nodes {
+		if node.Enabled == 0 {
+			continue
+		}
+		target := strings.Join([]string{
+			node.Name,
+			node.Description,
+			strings.Join(node.Examples, " "),
+			node.PromptSnippet,
+			node.PromptTemplate,
+			node.ParamPromptTemplate,
+		}, " ")
+		score := intentOverlapScore(queryTokens, buildIntentTokens(target))
+		if strings.Contains(target, query) {
+			score += 4
+		}
+		if score > best.Score {
+			best = RouteHint{
+				Kind:           node.Kind,
+				ToolID:         node.MCPToolID,
+				CollectionName: node.CollectionName,
+				Score:          score,
+			}
+		}
+	}
+	return best
 }
 
 // CreateNode 创建新的意图节点。
@@ -441,6 +488,58 @@ func cloneIntPointer(value *int) *int {
 	}
 	v := *value
 	return &v
+}
+
+func buildIntentTokens(text string) []string {
+	normalized := strings.ToLower(strings.TrimSpace(text))
+	if normalized == "" {
+		return nil
+	}
+	fields := strings.FieldsFunc(normalized, func(r rune) bool {
+		return r == ' ' || r == '\n' || r == '\t' || r == '，' || r == '。' || r == '、' || r == ',' || r == '.' || r == ':' || r == '：'
+	})
+	result := make([]string, 0, len(fields)+16)
+	for _, field := range fields {
+		field = strings.TrimSpace(field)
+		if field == "" {
+			continue
+		}
+		result = append(result, field)
+		appendIntentNGrams(&result, []rune(field), 2)
+		appendIntentNGrams(&result, []rune(field), 3)
+	}
+	if len(result) == 0 {
+		result = append(result, normalized)
+		appendIntentNGrams(&result, []rune(normalized), 2)
+		appendIntentNGrams(&result, []rune(normalized), 3)
+	}
+	return result
+}
+
+func intentOverlapScore(a, b []string) int {
+	if len(a) == 0 || len(b) == 0 {
+		return 0
+	}
+	bag := make(map[string]struct{}, len(b))
+	for _, item := range b {
+		bag[item] = struct{}{}
+	}
+	score := 0
+	for _, item := range a {
+		if _, ok := bag[item]; ok {
+			score++
+		}
+	}
+	return score
+}
+
+func appendIntentNGrams(target *[]string, runes []rune, size int) {
+	if len(runes) < size || size <= 0 {
+		return
+	}
+	for i := 0; i <= len(runes)-size; i++ {
+		*target = append(*target, string(runes[i:i+size]))
+	}
 }
 
 func (s *Service) persistLocked() error {

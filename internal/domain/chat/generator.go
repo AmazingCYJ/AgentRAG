@@ -30,6 +30,27 @@ type Generator interface {
 // ContextRetriever 定义知识上下文检索函数。
 type ContextRetriever func(ctx context.Context, query string, limit int) (string, error)
 
+// RouteKind 定义聊天路由类型。
+type RouteKind string
+
+const (
+	RouteKindNone      RouteKind = "none"
+	RouteKindKnowledge RouteKind = "knowledge"
+	RouteKindTool      RouteKind = "tool"
+)
+
+// RouteDecision 定义路由决策结果。
+type RouteDecision struct {
+	Kind   RouteKind
+	ToolID string
+}
+
+// RouteResolver 定义聊天路由决策函数。
+type RouteResolver func(ctx context.Context, question string) (RouteDecision, error)
+
+// ToolCaller 定义 MCP 工具调用函数。
+type ToolCaller func(ctx context.Context, toolID, question string) (string, error)
+
 type fallbackGenerator struct{}
 
 func (g *fallbackGenerator) Generate(_ context.Context, req GenerateRequest) (GenerateResult, error) {
@@ -44,7 +65,12 @@ func (g *fallbackGenerator) Generate(_ context.Context, req GenerateRequest) (Ge
 }
 
 // NewGeneratorFromConfig 根据配置创建聊天生成器。
-func NewGeneratorFromConfig(cfg appconfig.AIConfig, retriever ContextRetriever) Generator {
+func NewGeneratorFromConfig(
+	cfg appconfig.AIConfig,
+	retriever ContextRetriever,
+	resolver RouteResolver,
+	toolCaller ToolCaller,
+) Generator {
 	var generator Generator
 	if strings.TrimSpace(cfg.APIKey) == "" || strings.TrimSpace(cfg.Model) == "" {
 		generator = &fallbackGenerator{}
@@ -56,7 +82,7 @@ func NewGeneratorFromConfig(cfg appconfig.AIConfig, retriever ContextRetriever) 
 			generator = einoGenerator
 		}
 	}
-	return wrapWithRetriever(generator, retriever, 4)
+	return wrapWithRouting(generator, retriever, resolver, toolCaller, 4)
 }
 
 // EinoGenerator 基于 Eino OpenAI chat model 封装聊天生成。
@@ -159,5 +185,67 @@ func (g *retrievalGenerator) Generate(ctx context.Context, req GenerateRequest) 
 	if err == nil {
 		req.KnowledgeContext = strings.TrimSpace(contextText)
 	}
+	return g.inner.Generate(ctx, req)
+}
+
+type routingGenerator struct {
+	inner      Generator
+	retriever  ContextRetriever
+	resolver   RouteResolver
+	toolCaller ToolCaller
+	limit      int
+}
+
+func wrapWithRouting(
+	inner Generator,
+	retriever ContextRetriever,
+	resolver RouteResolver,
+	toolCaller ToolCaller,
+	limit int,
+) Generator {
+	if inner == nil {
+		inner = &fallbackGenerator{}
+	}
+	if limit <= 0 {
+		limit = 4
+	}
+	return &routingGenerator{
+		inner:      inner,
+		retriever:  retriever,
+		resolver:   resolver,
+		toolCaller: toolCaller,
+		limit:      limit,
+	}
+}
+
+func (g *routingGenerator) Generate(ctx context.Context, req GenerateRequest) (GenerateResult, error) {
+	decision := RouteDecision{Kind: RouteKindNone}
+	if g.resolver != nil {
+		if resolved, err := g.resolver(ctx, req.Question); err == nil {
+			decision = resolved
+		}
+	}
+
+	switch decision.Kind {
+	case RouteKindTool:
+		if g.toolCaller != nil && strings.TrimSpace(decision.ToolID) != "" {
+			if text, err := g.toolCaller(ctx, decision.ToolID, req.Question); err == nil {
+				req.KnowledgeContext = strings.TrimSpace(text)
+			}
+		}
+	case RouteKindKnowledge:
+		if g.retriever != nil {
+			if contextText, err := g.retriever(ctx, req.Question, g.limit); err == nil {
+				req.KnowledgeContext = strings.TrimSpace(contextText)
+			}
+		}
+	default:
+		if g.retriever != nil {
+			if contextText, err := g.retriever(ctx, req.Question, g.limit); err == nil {
+				req.KnowledgeContext = strings.TrimSpace(contextText)
+			}
+		}
+	}
+
 	return g.inner.Generate(ctx, req)
 }

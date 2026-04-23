@@ -113,3 +113,43 @@ func TestRetrievalGeneratorInjectsKnowledgeContext(t *testing.T) {
 		t.Fatalf("unexpected knowledge context %s", base.lastReq.KnowledgeContext)
 	}
 }
+
+func TestRoutingGeneratorUsesToolContextWhenMCPRouteSelected(t *testing.T) {
+	base := &captureGenerator{}
+	generator := wrapWithRouting(
+		base,
+		func(_ context.Context, _ string, _ int) (string, error) {
+			t.Fatal("retriever should not be called for MCP route")
+			return "", nil
+		},
+		func(_ context.Context, question string) (RouteDecision, error) {
+			if question != "北京天气怎么样" {
+				t.Fatalf("unexpected question %s", question)
+			}
+			return RouteDecision{
+				Kind:   RouteKindTool,
+				ToolID: "weather_query",
+			}, nil
+		},
+		func(_ context.Context, toolID, question string) (string, error) {
+			if toolID != "weather_query" {
+				t.Fatalf("unexpected tool id %s", toolID)
+			}
+			if question != "北京天气怎么样" {
+				t.Fatalf("unexpected tool question %s", question)
+			}
+			return "【北京天气】晴 24°C", nil
+		},
+		4,
+	)
+
+	_, err := generator.Generate(context.Background(), GenerateRequest{
+		Question: "北京天气怎么样",
+	})
+	if err != nil {
+		t.Fatalf("generate with routing failed: %v", err)
+	}
+	if base.lastReq.KnowledgeContext != "【北京天气】晴 24°C" {
+		t.Fatalf("expected tool context, got %s", base.lastReq.KnowledgeContext)
+	}
+}

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	domainconversation "github.com/AmazingCYJ/AgentRAG/internal/domain/conversation"
+	domainintenttree "github.com/AmazingCYJ/AgentRAG/internal/domain/intenttree"
 	appconfig "github.com/AmazingCYJ/AgentRAG/internal/platform/config"
 	"github.com/gogf/gf/v2/net/ghttp"
 	"github.com/gogf/gf/v2/util/guid"
@@ -232,6 +233,84 @@ func TestStopTaskCancelsStreamingResponse(t *testing.T) {
 	}
 	if messages[1].Role != "assistant" {
 		t.Fatalf("expected second message role assistant, got %s", messages[1].Role)
+	}
+}
+
+func TestChatRouteUsesMCPToolContextWhenIntentMatches(t *testing.T) {
+	conversationService := domainconversation.NewService(nil)
+	intentTreeService := domainintenttree.NewService(nil)
+	_, err := intentTreeService.CreateNode(domainintenttree.CreateRequest{
+		IntentCode: "weather_intent",
+		Name:       "天气查询",
+		Level:      0,
+		Kind:       2,
+		MCPToolID:  "weather_query",
+		Enabled:    1,
+		Examples:   []string{"北京天气怎么样", "查询天气"},
+	})
+	if err != nil {
+		t.Fatalf("create weather intent failed: %v", err)
+	}
+
+	server := newServerWithDeps(&appconfig.Config{
+		HTTP: appconfig.HTTPConfig{Port: 8080},
+		Auth: appconfig.AuthConfig{
+			JWTSecret: "test-secret",
+			TokenTTL:  time.Hour,
+			Bootstrap: appconfig.BootstrapUserConfig{
+				UserID:   "u_admin",
+				Username: "admin",
+				Password: "admin123",
+				Role:     "admin",
+			},
+		},
+	}, guid.S(), serverDeps{
+		conversationService: conversationService,
+		intentTreeService:   intentTreeService,
+	})
+	server.SetAddr("127.0.0.1:0")
+	if err := server.Start(); err != nil {
+		t.Fatalf("start server failed: %v", err)
+	}
+	defer server.Shutdown()
+	time.Sleep(100 * time.Millisecond)
+
+	token := loginAndGetToken(t, server.GetListenedPort())
+	request, err := http.NewRequest(
+		http.MethodGet,
+		fmt.Sprintf("http://127.0.0.1:%d/rag/v3/chat?question=%s", server.GetListenedPort(), "北京天气怎么样"),
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("create chat request failed: %v", err)
+	}
+	request.Header.Set("Authorization", token)
+
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("request chat stream failed: %v", err)
+	}
+	defer response.Body.Close()
+
+	events := readSSEEventsUntilDone(t, response.Body)
+	foundWeather := false
+	for _, event := range events {
+		if event.Name != "message" {
+			continue
+		}
+		var payload struct {
+			Type  string `json:"type"`
+			Delta string `json:"delta"`
+		}
+		if err := json.Unmarshal(event.Data, &payload); err != nil {
+			t.Fatalf("decode message payload failed: %v", err)
+		}
+		if payload.Type == "response" && strings.Contains(payload.Delta, "北京") {
+			foundWeather = true
+		}
+	}
+	if !foundWeather {
+		t.Fatal("expected response to contain weather tool context")
 	}
 }
 
