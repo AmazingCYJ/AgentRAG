@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 
 	appconfig "github.com/AmazingCYJ/AgentRAG/internal/platform/config"
@@ -50,6 +51,9 @@ type RouteResolver func(ctx context.Context, question string) (RouteDecision, er
 
 // ToolCaller 定义 MCP 工具调用函数。
 type ToolCaller func(ctx context.Context, toolID, question string) (string, error)
+
+// ToolParamExtractor 定义工具参数提取函数。
+type ToolParamExtractor func(ctx context.Context, schema mcpToolSchema, question string) (map[string]any, error)
 
 type fallbackGenerator struct{}
 
@@ -248,4 +252,47 @@ func (g *routingGenerator) Generate(ctx context.Context, req GenerateRequest) (G
 	}
 
 	return g.inner.Generate(ctx, req)
+}
+
+// BuildEinoToolParamExtractor 基于 Eino 模型创建参数提取函数。
+func BuildEinoToolParamExtractor(cfg appconfig.AIConfig) ToolParamExtractor {
+	if strings.TrimSpace(cfg.APIKey) == "" || strings.TrimSpace(cfg.Model) == "" {
+		return nil
+	}
+
+	model, err := einoopenai.NewChatModel(context.Background(), &einoopenai.ChatModelConfig{
+		APIKey:  cfg.APIKey,
+		BaseURL: cfg.BaseURL,
+		Model:   cfg.Model,
+		Timeout: cfg.Timeout,
+	})
+	if err != nil {
+		return nil
+	}
+
+	return func(ctx context.Context, schemaDef mcpToolSchema, question string) (map[string]any, error) {
+		systemPrompt := "你是一个工具参数提取器。请严格输出 JSON 对象，不要输出额外解释。只返回工具定义中声明过的参数。"
+		userPrompt := "工具定义如下：\n" + buildToolDefinitionPrompt(schemaDef) + "\n请根据以上工具定义，从下面的问题中提取参数：\n" + question
+		resp, err := model.Generate(ctx, []*schema.Message{
+			schema.SystemMessage(systemPrompt),
+			schema.UserMessage(userPrompt),
+		})
+		if err != nil {
+			return nil, err
+		}
+		raw := strings.TrimSpace(resp.Content)
+		raw = strings.TrimPrefix(raw, "```json")
+		raw = strings.TrimPrefix(raw, "```")
+		raw = strings.TrimSuffix(raw, "```")
+		raw = strings.TrimSpace(raw)
+		if json.Valid([]byte(raw)) {
+			return parseToolArguments(raw, schemaDef)
+		}
+		start := strings.Index(raw, "{")
+		end := strings.LastIndex(raw, "}")
+		if start >= 0 && end > start {
+			return parseToolArguments(raw[start:end+1], schemaDef)
+		}
+		return map[string]any{}, nil
+	}
 }

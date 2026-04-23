@@ -153,3 +153,34 @@ func TestRoutingGeneratorUsesToolContextWhenMCPRouteSelected(t *testing.T) {
 		t.Fatalf("expected tool context, got %s", base.lastReq.KnowledgeContext)
 	}
 }
+
+func TestParameterExtractorParsesOnlyDeclaredToolArguments(t *testing.T) {
+	rawJSON := `{"city":"北京","queryType":"forecast","unexpected":"drop"}`
+	result, err := parseToolArguments(rawJSON, mcpToolSchema{
+		toolID: "weather_query",
+		parameters: map[string]mcpToolParameter{
+			"city": {
+				description: "城市名称",
+				typ:         "string",
+				required:    true,
+			},
+			"queryType": {
+				description: "查询类型",
+				typ:         "string",
+				required:    false,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("parse tool arguments failed: %v", err)
+	}
+	if len(result) != 2 {
+		t.Fatalf("expected 2 parsed args, got %d", len(result))
+	}
+	if result["city"] != "北京" {
+		t.Fatalf("expected city 北京, got %#v", result["city"])
+	}
+	if _, ok := result["unexpected"]; ok {
+		t.Fatal("unexpected field should be filtered out")
+	}
+}

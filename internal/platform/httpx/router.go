@@ -90,6 +90,7 @@ func newServerWithDeps(cfg *appconfig.Config, name string, deps serverDeps) *ght
 	chatService := deps.chatService
 	if chatService == nil {
 		mcpRegistry := mcpserver.NewRegistry()
+		paramExtractor := domainchat.BuildEinoToolParamExtractor(cfg.AI)
 		routeResolver := func(_ context.Context, question string) (domainchat.RouteDecision, error) {
 			hint := intentTreeService.MatchQuestion(question)
 			if hint.Score <= 0 {
@@ -109,6 +110,11 @@ func newServerWithDeps(cfg *appconfig.Config, name string, deps serverDeps) *ght
 				return "", nil
 			}
 			arguments := buildMCPToolArguments(toolID, question)
+			if paramExtractor != nil {
+				if extracted, err := paramExtractor(context.Background(), domainchat.ToChatToolSchema(executor.Definition()), question); err == nil && len(extracted) > 0 {
+					arguments = extracted
+				}
+			}
 			result := executor.Execute(mcpserver.ToolRequest{
 				ToolID:     toolID,
 				Parameters: arguments,
