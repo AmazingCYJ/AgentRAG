@@ -28,6 +28,22 @@ func TestRagTraceStatePersistsAcrossServiceRecreation(t *testing.T) {
 		StartTime:      startTime,
 		EndTime:        startTime.Add(1200 * time.Millisecond),
 		DeepThinking:   true,
+		Steps: []ChatTraceStep{
+			{
+				NodeID:     "route",
+				NodeType:   "ROUTER",
+				NodeName:   "Route Intent",
+				Status:     "success",
+				DurationMs: 50,
+			},
+			{
+				NodeID:     "tool",
+				NodeType:   "TOOL",
+				NodeName:   "Call MCP Tool",
+				Status:     "success",
+				DurationMs: 180,
+			},
+		},
 	})
 
 	recreated := NewService(store)
@@ -40,5 +56,18 @@ func TestRagTraceStatePersistsAcrossServiceRecreation(t *testing.T) {
 	}
 	if len(detail.Nodes) == 0 {
 		t.Fatal("expected recreated trace nodes")
+	}
+	foundRouter := false
+	foundTool := false
+	for _, node := range detail.Nodes {
+		if node.NodeType == "ROUTER" {
+			foundRouter = true
+		}
+		if node.NodeType == "TOOL" {
+			foundTool = true
+		}
+	}
+	if !foundRouter || !foundTool {
+		t.Fatalf("expected router/tool nodes after recreation, router=%v tool=%v", foundRouter, foundTool)
 	}
 }

@@ -184,3 +184,34 @@ func TestParameterExtractorParsesOnlyDeclaredToolArguments(t *testing.T) {
 		t.Fatal("unexpected field should be filtered out")
 	}
 }
+
+func TestRoutingGeneratorEmitsWorkflowSteps(t *testing.T) {
+	base := &captureGenerator{}
+	generator := wrapWithRouting(
+		base,
+		func(_ context.Context, _ string, _ int) (string, error) {
+			return "知识上下文", nil
+		},
+		func(_ context.Context, _ string) (RouteDecision, error) {
+			return RouteDecision{Kind: RouteKindKnowledge}, nil
+		},
+		nil,
+		4,
+	)
+
+	result, err := generator.Generate(context.Background(), GenerateRequest{
+		Question: "请总结知识库内容",
+	})
+	if err != nil {
+		t.Fatalf("generate with workflow steps failed: %v", err)
+	}
+	if len(result.Steps) < 2 {
+		t.Fatalf("expected at least 2 workflow steps, got %d", len(result.Steps))
+	}
+	if result.Steps[0].NodeType != "ROUTER" {
+		t.Fatalf("expected first step ROUTER, got %s", result.Steps[0].NodeType)
+	}
+	if result.Steps[1].NodeType != "RETRIEVER" {
+		t.Fatalf("expected second step RETRIEVER, got %s", result.Steps[1].NodeType)
+	}
+}

@@ -21,6 +21,17 @@ type GenerateRequest struct {
 type GenerateResult struct {
 	Thinking string
 	Answer   string
+	Steps    []WorkflowStep
+}
+
+// WorkflowStep 定义聊天 workflow 的单个阶段。
+type WorkflowStep struct {
+	NodeID     string
+	NodeType   string
+	NodeName   string
+	Status     string
+	DurationMs int64
+	Detail     string
 }
 
 // Generator 定义聊天生成器接口。
@@ -65,6 +76,15 @@ func (g *fallbackGenerator) Generate(_ context.Context, req GenerateRequest) (Ge
 	return GenerateResult{
 		Thinking: thinking,
 		Answer:   buildResponseText(req.Question, req.DeepThinking),
+		Steps: []WorkflowStep{
+			{
+				NodeID:     "fallback_generate",
+				NodeType:   "LLM",
+				NodeName:   "Fallback Generate",
+				Status:     "success",
+				DurationMs: 1,
+			},
+		},
 	}, nil
 }
 
@@ -151,6 +171,15 @@ func (g *EinoGenerator) Generate(ctx context.Context, req GenerateRequest) (Gene
 	return GenerateResult{
 		Thinking: strings.TrimSpace(resp.ReasoningContent),
 		Answer:   strings.TrimSpace(resp.Content),
+		Steps: []WorkflowStep{
+			{
+				NodeID:     "model_generate",
+				NodeType:   "LLM",
+				NodeName:   "Eino Generate",
+				Status:     "success",
+				DurationMs: 1,
+			},
+		},
 	}, nil
 }
 
@@ -229,29 +258,68 @@ func (g *routingGenerator) Generate(ctx context.Context, req GenerateRequest) (G
 			decision = resolved
 		}
 	}
+	steps := []WorkflowStep{
+		{
+			NodeID:     "route_intent",
+			NodeType:   "ROUTER",
+			NodeName:   "Route Intent",
+			Status:     "success",
+			DurationMs: 1,
+			Detail:     string(decision.Kind),
+		},
+	}
 
 	switch decision.Kind {
 	case RouteKindTool:
 		if g.toolCaller != nil && strings.TrimSpace(decision.ToolID) != "" {
 			if text, err := g.toolCaller(ctx, decision.ToolID, req.Question); err == nil {
 				req.KnowledgeContext = strings.TrimSpace(text)
+				steps = append(steps, WorkflowStep{
+					NodeID:     "call_tool",
+					NodeType:   "TOOL",
+					NodeName:   "Call MCP Tool",
+					Status:     "success",
+					DurationMs: 1,
+					Detail:     decision.ToolID,
+				})
 			}
 		}
 	case RouteKindKnowledge:
 		if g.retriever != nil {
 			if contextText, err := g.retriever(ctx, req.Question, g.limit); err == nil {
 				req.KnowledgeContext = strings.TrimSpace(contextText)
+				steps = append(steps, WorkflowStep{
+					NodeID:     "retrieve_context",
+					NodeType:   "RETRIEVER",
+					NodeName:   "Retrieve Knowledge",
+					Status:     "success",
+					DurationMs: 1,
+				})
 			}
 		}
 	default:
 		if g.retriever != nil {
 			if contextText, err := g.retriever(ctx, req.Question, g.limit); err == nil {
 				req.KnowledgeContext = strings.TrimSpace(contextText)
+				if req.KnowledgeContext != "" {
+					steps = append(steps, WorkflowStep{
+						NodeID:     "retrieve_context",
+						NodeType:   "RETRIEVER",
+						NodeName:   "Retrieve Knowledge",
+						Status:     "success",
+						DurationMs: 1,
+					})
+				}
 			}
 		}
 	}
 
-	return g.inner.Generate(ctx, req)
+	result, err := g.inner.Generate(ctx, req)
+	if err != nil {
+		return GenerateResult{}, err
+	}
+	result.Steps = append(steps, result.Steps...)
+	return result, nil
 }
 
 // BuildEinoToolParamExtractor 基于 Eino 模型创建参数提取函数。

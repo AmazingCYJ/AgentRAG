@@ -3,6 +3,7 @@ package ragtrace
 import (
 	"errors"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -89,6 +90,17 @@ type ChatTraceRecord struct {
 	StartTime      time.Time
 	EndTime        time.Time
 	DeepThinking   bool
+	Steps          []ChatTraceStep
+}
+
+// ChatTraceStep 定义聊天 workflow 的单个阶段。
+type ChatTraceStep struct {
+	NodeID     string
+	NodeType   string
+	NodeName   string
+	Status     string
+	DurationMs int64
+	Detail     string
 }
 
 // Service 提供 RAG Trace 查询与记录能力。
@@ -281,7 +293,7 @@ func (s *Service) RecordChatTrace(record ChatTraceRecord) string {
 		StartTime:      startTime,
 		EndTime:        endTime,
 	}
-	nodes := buildChatNodes(traceID, run, record.DeepThinking)
+	nodes := buildChatNodes(traceID, run, record.DeepThinking, record.Steps)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -396,7 +408,7 @@ func defaultTraceName(traceName string) string {
 	return value
 }
 
-func buildChatNodes(traceID string, run Run, deepThinking bool) []Node {
+func buildChatNodes(traceID string, run Run, deepThinking bool, steps []ChatTraceStep) []Node {
 	start := run.StartTime
 	end := run.EndTime
 	total := run.DurationMs
@@ -469,6 +481,36 @@ func buildChatNodes(traceID string, run Run, deepThinking bool) []Node {
 		run.ErrorMessage,
 	))
 
+	stepOffset := int64(20)
+	for index, step := range steps {
+		duration := step.DurationMs
+		if duration <= 0 {
+			duration = 1
+		}
+		nodeID := step.NodeID
+		if strings.TrimSpace(nodeID) == "" {
+			nodeID = "step_" + strconv.Itoa(index+1)
+		}
+		nodeName := step.NodeName
+		if strings.TrimSpace(nodeName) == "" {
+			nodeName = step.NodeType
+		}
+		nodes = append(nodes, makeNode(
+			nodeID,
+			"node-entry",
+			1,
+			defaultString(step.NodeType, "STEP"),
+			nodeName,
+			"ChatWorkflow",
+			step.NodeID,
+			stepOffset,
+			duration,
+			defaultString(step.Status, "success"),
+			step.Detail,
+		))
+		stepOffset += duration
+	}
+
 	return nodes
 }
 
@@ -477,6 +519,13 @@ func maxInt64(a, b int64) int64 {
 		return a
 	}
 	return b
+}
+
+func defaultString(value, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	return strings.TrimSpace(value)
 }
 
 func (s *Service) persistLocked() error {
