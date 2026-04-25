@@ -215,3 +215,52 @@ func TestRoutingGeneratorEmitsWorkflowSteps(t *testing.T) {
 		t.Fatalf("expected second step RETRIEVER, got %s", result.Steps[1].NodeType)
 	}
 }
+
+func TestRewriteGeneratorUsesRewrittenQueryForRoutingAndRetrieval(t *testing.T) {
+	base := &captureGenerator{}
+	routedQuestion := ""
+	retrievedQuery := ""
+	generator := wrapWithRewrite(
+		wrapWithRouting(
+			base,
+			func(_ context.Context, query string, _ int) (string, error) {
+				retrievedQuery = query
+				return "知识上下文", nil
+			},
+			func(_ context.Context, question string) (RouteDecision, error) {
+				routedQuestion = question
+				return RouteDecision{Kind: RouteKindKnowledge}, nil
+			},
+			nil,
+			4,
+		),
+		func(_ context.Context, question string) (string, error) {
+			if question != "它怎么配置" {
+				t.Fatalf("unexpected original question %s", question)
+			}
+			return "审批流程怎么配置", nil
+		},
+	)
+
+	result, err := generator.Generate(context.Background(), GenerateRequest{
+		Question: "它怎么配置",
+	})
+	if err != nil {
+		t.Fatalf("generate with rewrite failed: %v", err)
+	}
+	if routedQuestion != "审批流程怎么配置" {
+		t.Fatalf("expected routed rewritten question, got %s", routedQuestion)
+	}
+	if retrievedQuery != "审批流程怎么配置" {
+		t.Fatalf("expected retrieval rewritten query, got %s", retrievedQuery)
+	}
+	if base.lastReq.Question != "它怎么配置" {
+		t.Fatalf("expected final answer to keep original question, got %s", base.lastReq.Question)
+	}
+	if len(result.Steps) == 0 || result.Steps[0].NodeType != "REWRITER" {
+		t.Fatalf("expected first workflow step REWRITER, got %#v", result.Steps)
+	}
+	if result.Steps[0].Detail != "审批流程怎么配置" {
+		t.Fatalf("expected rewrite detail, got %s", result.Steps[0].Detail)
+	}
+}

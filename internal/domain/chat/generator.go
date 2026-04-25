@@ -15,6 +15,7 @@ type GenerateRequest struct {
 	Question         string
 	DeepThinking     bool
 	KnowledgeContext string
+	RewriteQuestion  string
 }
 
 // GenerateResult 定义聊天生成输出。
@@ -41,6 +42,9 @@ type Generator interface {
 
 // ContextRetriever 定义知识上下文检索函数。
 type ContextRetriever func(ctx context.Context, query string, limit int) (string, error)
+
+// QueryRewriter 定义查询改写函数。
+type QueryRewriter func(ctx context.Context, question string) (string, error)
 
 // RouteKind 定义聊天路由类型。
 type RouteKind string
@@ -106,7 +110,10 @@ func NewGeneratorFromConfig(
 			generator = einoGenerator
 		}
 	}
-	return wrapWithRouting(generator, retriever, resolver, toolCaller, 4)
+	return wrapWithRewrite(
+		wrapWithRouting(generator, retriever, resolver, toolCaller, 4),
+		BuildEinoQueryRewriter(cfg),
+	)
 }
 
 // EinoGenerator 基于 Eino OpenAI chat model 封装聊天生成。
@@ -214,11 +221,57 @@ func wrapWithRetriever(inner Generator, retriever ContextRetriever, limit int) G
 }
 
 func (g *retrievalGenerator) Generate(ctx context.Context, req GenerateRequest) (GenerateResult, error) {
-	contextText, err := g.retriever(ctx, req.Question, g.limit)
+	contextText, err := g.retriever(ctx, effectiveQuery(req), g.limit)
 	if err == nil {
 		req.KnowledgeContext = strings.TrimSpace(contextText)
 	}
 	return g.inner.Generate(ctx, req)
+}
+
+type rewriteGenerator struct {
+	inner    Generator
+	rewriter QueryRewriter
+}
+
+func wrapWithRewrite(inner Generator, rewriter QueryRewriter) Generator {
+	if inner == nil {
+		inner = &fallbackGenerator{}
+	}
+	if rewriter == nil {
+		return inner
+	}
+	return &rewriteGenerator{
+		inner:    inner,
+		rewriter: rewriter,
+	}
+}
+
+func (g *rewriteGenerator) Generate(ctx context.Context, req GenerateRequest) (GenerateResult, error) {
+	rewritten, err := g.rewriter(ctx, req.Question)
+	if err == nil {
+		rewritten = strings.TrimSpace(rewritten)
+		if rewritten != "" && rewritten != strings.TrimSpace(req.Question) {
+			req.RewriteQuestion = rewritten
+		}
+	}
+
+	result, err := g.inner.Generate(ctx, req)
+	if err != nil {
+		return GenerateResult{}, err
+	}
+	if req.RewriteQuestion == "" {
+		return result, nil
+	}
+	step := WorkflowStep{
+		NodeID:     "rewrite_query",
+		NodeType:   "REWRITER",
+		NodeName:   "Rewrite Query",
+		Status:     "success",
+		DurationMs: 1,
+		Detail:     req.RewriteQuestion,
+	}
+	result.Steps = append([]WorkflowStep{step}, result.Steps...)
+	return result, nil
 }
 
 type routingGenerator struct {
@@ -252,9 +305,10 @@ func wrapWithRouting(
 }
 
 func (g *routingGenerator) Generate(ctx context.Context, req GenerateRequest) (GenerateResult, error) {
+	query := effectiveQuery(req)
 	decision := RouteDecision{Kind: RouteKindNone}
 	if g.resolver != nil {
-		if resolved, err := g.resolver(ctx, req.Question); err == nil {
+		if resolved, err := g.resolver(ctx, query); err == nil {
 			decision = resolved
 		}
 	}
@@ -272,7 +326,7 @@ func (g *routingGenerator) Generate(ctx context.Context, req GenerateRequest) (G
 	switch decision.Kind {
 	case RouteKindTool:
 		if g.toolCaller != nil && strings.TrimSpace(decision.ToolID) != "" {
-			if text, err := g.toolCaller(ctx, decision.ToolID, req.Question); err == nil {
+			if text, err := g.toolCaller(ctx, decision.ToolID, query); err == nil {
 				req.KnowledgeContext = strings.TrimSpace(text)
 				steps = append(steps, WorkflowStep{
 					NodeID:     "call_tool",
@@ -286,7 +340,7 @@ func (g *routingGenerator) Generate(ctx context.Context, req GenerateRequest) (G
 		}
 	case RouteKindKnowledge:
 		if g.retriever != nil {
-			if contextText, err := g.retriever(ctx, req.Question, g.limit); err == nil {
+			if contextText, err := g.retriever(ctx, query, g.limit); err == nil {
 				req.KnowledgeContext = strings.TrimSpace(contextText)
 				steps = append(steps, WorkflowStep{
 					NodeID:     "retrieve_context",
@@ -299,7 +353,7 @@ func (g *routingGenerator) Generate(ctx context.Context, req GenerateRequest) (G
 		}
 	default:
 		if g.retriever != nil {
-			if contextText, err := g.retriever(ctx, req.Question, g.limit); err == nil {
+			if contextText, err := g.retriever(ctx, query, g.limit); err == nil {
 				req.KnowledgeContext = strings.TrimSpace(contextText)
 				if req.KnowledgeContext != "" {
 					steps = append(steps, WorkflowStep{
@@ -320,6 +374,41 @@ func (g *routingGenerator) Generate(ctx context.Context, req GenerateRequest) (G
 	}
 	result.Steps = append(steps, result.Steps...)
 	return result, nil
+}
+
+func effectiveQuery(req GenerateRequest) string {
+	if strings.TrimSpace(req.RewriteQuestion) != "" {
+		return strings.TrimSpace(req.RewriteQuestion)
+	}
+	return strings.TrimSpace(req.Question)
+}
+
+// BuildEinoQueryRewriter 基于 Eino 模型创建查询改写函数。
+func BuildEinoQueryRewriter(cfg appconfig.AIConfig) QueryRewriter {
+	if strings.TrimSpace(cfg.APIKey) == "" || strings.TrimSpace(cfg.Model) == "" {
+		return nil
+	}
+
+	model, err := einoopenai.NewChatModel(context.Background(), &einoopenai.ChatModelConfig{
+		APIKey:  cfg.APIKey,
+		BaseURL: cfg.BaseURL,
+		Model:   cfg.Model,
+		Timeout: cfg.Timeout,
+	})
+	if err != nil {
+		return nil
+	}
+
+	return func(ctx context.Context, question string) (string, error) {
+		resp, err := model.Generate(ctx, []*schema.Message{
+			schema.SystemMessage("你是 AgentRAG 的查询改写器。请把用户问题改写成适合检索和工具路由的独立中文查询，只输出改写后的查询，不要解释。"),
+			schema.UserMessage(strings.TrimSpace(question)),
+		})
+		if err != nil {
+			return "", err
+		}
+		return strings.TrimSpace(resp.Content), nil
+	}
 }
 
 // BuildEinoToolParamExtractor 基于 Eino 模型创建参数提取函数。
