@@ -16,5 +16,10 @@ ai:
   deepThinkingModel: ""
   systemPrompt: "你是 AgentRAG 的智能问答助手，请使用简洁、专业、可执行的中文回答用户问题。"
   timeout: "60s"
+  workflow:
+    retrievalLimit: 4
+    rewritePrompt: "你是 AgentRAG 的查询改写器。请把用户问题改写成适合检索和工具路由的独立中文查询，只输出改写后的查询，不要解释。"
+    toolParamPrompt: "你是一个工具参数提取器。请严格输出 JSON 对象，不要输出额外解释。只返回工具定义中声明过的参数。"
+    knowledgePrompt: "以下是从知识库检索到的上下文，请优先依据这些内容回答；如果信息不足，请明确说明。"
 state:
   file: "data/state.json"

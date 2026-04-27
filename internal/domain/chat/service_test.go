@@ -6,6 +6,7 @@ import (
 	"time"
 
 	domainconversation "github.com/AmazingCYJ/AgentRAG/internal/domain/conversation"
+	appconfig "github.com/AmazingCYJ/AgentRAG/internal/platform/config"
 )
 
 type fakeWriter struct {
@@ -213,6 +214,38 @@ func TestRoutingGeneratorEmitsWorkflowSteps(t *testing.T) {
 	}
 	if result.Steps[1].NodeType != "RETRIEVER" {
 		t.Fatalf("expected second step RETRIEVER, got %s", result.Steps[1].NodeType)
+	}
+}
+
+func TestBuildWorkflowOptionsDefaultsInvalidRetrievalLimit(t *testing.T) {
+	options := buildWorkflowOptions(appconfig.AIWorkflowConfig{RetrievalLimit: -1})
+	if options.retrievalLimit != 4 {
+		t.Fatalf("expected default retrieval limit 4, got %d", options.retrievalLimit)
+	}
+}
+
+func TestNewGeneratorFromConfigUsesConfiguredRetrievalLimit(t *testing.T) {
+	usedLimit := 0
+	generator := NewGeneratorFromConfig(
+		appconfig.AIConfig{
+			Workflow: appconfig.AIWorkflowConfig{RetrievalLimit: 7},
+		},
+		func(_ context.Context, _ string, limit int) (string, error) {
+			usedLimit = limit
+			return "知识上下文", nil
+		},
+		func(_ context.Context, _ string) (RouteDecision, error) {
+			return RouteDecision{Kind: RouteKindKnowledge}, nil
+		},
+		nil,
+	)
+
+	_, err := generator.Generate(context.Background(), GenerateRequest{Question: "测试问题"})
+	if err != nil {
+		t.Fatalf("generate failed: %v", err)
+	}
+	if usedLimit != 7 {
+		t.Fatalf("expected configured retrieval limit 7, got %d", usedLimit)
 	}
 }
 
