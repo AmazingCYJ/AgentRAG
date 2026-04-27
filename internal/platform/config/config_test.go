@@ -30,3 +30,16 @@ func TestLoadParsesAIWorkflowConfig(t *testing.T) {
 		t.Fatalf("unexpected knowledge prompt %s", cfg.AI.Workflow.KnowledgePrompt)
 	}
 }
+
+func TestLoadParsesDatabaseConfig(t *testing.T) {
+	cfg, err := Load("testdata/config.yaml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Database.Driver != "sqlite" {
+		t.Fatalf("expected sqlite driver, got %s", cfg.Database.Driver)
+	}
+	if cfg.Database.DSN != "data/agentrag.db" {
+		t.Fatalf("expected database dsn data/agentrag.db, got %s", cfg.Database.DSN)
+	}
+}

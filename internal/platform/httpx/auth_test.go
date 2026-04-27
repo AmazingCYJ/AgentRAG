@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"testing"
 	"time"
 
 	appconfig "github.com/AmazingCYJ/AgentRAG/internal/platform/config"
 	"github.com/gogf/gf/v2/util/guid"
+	_ "modernc.org/sqlite"
 )
 
 func TestLoginRouteReturnsUserWithToken(t *testing.T) {
@@ -273,6 +275,95 @@ func TestCreatedUserCanLogin(t *testing.T) {
 	}
 	if loginBody.Data.Token == "" {
 		t.Fatal("expected created user login token")
+	}
+}
+
+func TestCreatedUserPersistsThroughConfiguredDatabase(t *testing.T) {
+	dsn := filepath.Join(t.TempDir(), "agentrag.db")
+	cfg := appconfig.Config{
+		HTTP: appconfig.HTTPConfig{Port: 8080},
+		Auth: appconfig.AuthConfig{
+			JWTSecret: "test-secret",
+			TokenTTL:  time.Hour,
+			Bootstrap: appconfig.BootstrapUserConfig{
+				UserID:   "u_admin",
+				Username: "admin",
+				Password: "admin123",
+				Role:     "admin",
+			},
+		},
+		Database: appconfig.DatabaseConfig{
+			Driver: "sqlite",
+			DSN:    dsn,
+		},
+	}
+	server := newServer(&cfg, guid.S())
+	server.SetAddr("127.0.0.1:0")
+	if err := server.Start(); err != nil {
+		t.Fatalf("start server failed: %v", err)
+	}
+	time.Sleep(100 * time.Millisecond)
+
+	adminToken := loginAndGetToken(t, server.GetListenedPort())
+	createPayload, _ := json.Marshal(map[string]string{
+		"username": "db_user",
+		"password": "db123",
+		"role":     "user",
+	})
+	createRequest, err := http.NewRequest(
+		http.MethodPost,
+		fmt.Sprintf("http://127.0.0.1:%d/users", server.GetListenedPort()),
+		bytes.NewReader(createPayload),
+	)
+	if err != nil {
+		t.Fatalf("create user request failed: %v", err)
+	}
+	createRequest.Header.Set("Authorization", adminToken)
+	createRequest.Header.Set("Content-Type", "application/json")
+	createResponse, err := http.DefaultClient.Do(createRequest)
+	if err != nil {
+		t.Fatalf("request create user failed: %v", err)
+	}
+	createResponse.Body.Close()
+	server.Shutdown()
+
+	recreated := newServer(&cfg, guid.S())
+	recreated.SetAddr("127.0.0.1:0")
+	if err := recreated.Start(); err != nil {
+		t.Fatalf("start recreated server failed: %v", err)
+	}
+	defer recreated.Shutdown()
+	time.Sleep(100 * time.Millisecond)
+
+	loginPayload, _ := json.Marshal(map[string]string{
+		"username": "db_user",
+		"password": "db123",
+	})
+	loginResponse, err := http.Post(
+		fmt.Sprintf("http://127.0.0.1:%d/auth/login", recreated.GetListenedPort()),
+		"application/json",
+		bytes.NewReader(loginPayload),
+	)
+	if err != nil {
+		t.Fatalf("login persisted user failed: %v", err)
+	}
+	defer loginResponse.Body.Close()
+
+	var body struct {
+		Code string `json:"code"`
+		Data struct {
+			Username string `json:"username"`
+			Token    string `json:"token"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(loginResponse.Body).Decode(&body); err != nil {
+		t.Fatalf("decode persisted user login failed: %v", err)
+	}
+	if body.Code != "0" {
+		t.Fatalf("expected login code 0, got %s", body.Code)
+	}
+	if body.Data.Username != "db_user" || body.Data.Token == "" {
+		t.Fatalf("unexpected persisted login response %#v", body.Data)
 	}
 }
 

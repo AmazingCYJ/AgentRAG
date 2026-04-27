@@ -16,6 +16,7 @@ import (
 	domainusermgmt "github.com/AmazingCYJ/AgentRAG/internal/domain/usermgmt"
 	"github.com/AmazingCYJ/AgentRAG/internal/mcpserver"
 	appconfig "github.com/AmazingCYJ/AgentRAG/internal/platform/config"
+	platformdb "github.com/AmazingCYJ/AgentRAG/internal/platform/db"
 	"github.com/AmazingCYJ/AgentRAG/internal/platform/httpx/handlers"
 	platformstate "github.com/AmazingCYJ/AgentRAG/internal/platform/state"
 	"github.com/gogf/gf/v2/frame/g"
@@ -61,7 +62,7 @@ func newServerWithDeps(cfg *appconfig.Config, name string, deps serverDeps) *ght
 	}
 	userService := deps.userService
 	if userService == nil {
-		userService = domainusermgmt.NewService(cfg.Auth, stateStore)
+		userService = newUserService(cfg, stateStore)
 	}
 	authService := deps.authService
 	if authService == nil {
@@ -234,6 +235,24 @@ func newServerWithDeps(cfg *appconfig.Config, name string, deps serverDeps) *ght
 	server.BindHandler("GET:/rag/v3/chat", chatHandler.StreamChat)
 	server.BindHandler("POST:/rag/v3/stop", chatHandler.Stop)
 	return server
+}
+
+func newUserService(cfg *appconfig.Config, stateStore *platformstate.FileStore) *domainusermgmt.Service {
+	if cfg == nil {
+		return domainusermgmt.NewService(appconfig.AuthConfig{}, stateStore)
+	}
+	database, err := platformdb.OpenDatabase(platformdb.Config{
+		Driver: cfg.Database.Driver,
+		DSN:    cfg.Database.DSN,
+	})
+	if err == nil && database != nil {
+		repository := platformdb.NewSQLUserRepository(database)
+		if err := repository.Bootstrap(); err == nil {
+			return domainusermgmt.NewServiceWithRepository(cfg.Auth, repository)
+		}
+		_ = database.Close()
+	}
+	return domainusermgmt.NewService(cfg.Auth, stateStore)
 }
 
 func buildMCPToolArguments(toolID, question string) map[string]any {

@@ -4,10 +4,11 @@ import "time"
 
 // Config 表示 AgentRAG 当前阶段的最小配置集合。
 type Config struct {
-	HTTP  HTTPConfig  `json:"http"`
-	Auth  AuthConfig  `json:"auth"`
-	AI    AIConfig    `json:"ai"`
-	State StateConfig `json:"state"`
+	HTTP     HTTPConfig     `json:"http"`
+	Auth     AuthConfig     `json:"auth"`
+	AI       AIConfig       `json:"ai"`
+	Database DatabaseConfig `json:"database"`
+	State    StateConfig    `json:"state"`
 }
 
 // HTTPConfig 定义 HTTP 服务监听配置。
@@ -53,4 +54,10 @@ type AIWorkflowConfig struct {
 // StateConfig 定义本地状态持久化配置。
 type StateConfig struct {
 	File string `json:"file"`
+}
+
+// DatabaseConfig 定义关系型数据库连接配置。
+type DatabaseConfig struct {
+	Driver string `json:"driver"`
+	DSN    string `json:"dsn"`
 }

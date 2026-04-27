@@ -65,6 +65,58 @@ type UpdateRequest struct {
 	Avatar   string
 }
 
+// UserRepository 定义用户持久化仓储。
+type UserRepository interface {
+	LoadUsers() ([]User, error)
+	SaveUsers(users []User) error
+}
+
+type fileStoreUserRepository struct {
+	store *platformstate.FileStore
+}
+
+func (r *fileStoreUserRepository) LoadUsers() ([]User, error) {
+	if r == nil || r.store == nil {
+		return nil, nil
+	}
+	snapshot, err := r.store.Load()
+	if err != nil {
+		return nil, err
+	}
+	users := make([]User, 0, len(snapshot.Users))
+	for _, record := range snapshot.Users {
+		users = append(users, User{
+			ID:         record.ID,
+			Username:   record.Username,
+			Password:   record.Password,
+			Role:       record.Role,
+			Avatar:     record.Avatar,
+			CreateTime: record.CreateTime,
+			UpdateTime: record.UpdateTime,
+		})
+	}
+	return users, nil
+}
+
+func (r *fileStoreUserRepository) SaveUsers(users []User) error {
+	if r == nil || r.store == nil {
+		return nil
+	}
+	records := make([]platformstate.UserRecord, 0, len(users))
+	for _, user := range users {
+		records = append(records, platformstate.UserRecord{
+			ID:         user.ID,
+			Username:   user.Username,
+			Password:   user.Password,
+			Role:       user.Role,
+			Avatar:     user.Avatar,
+			CreateTime: user.CreateTime,
+			UpdateTime: user.UpdateTime,
+		})
+	}
+	return r.store.Save(platformstate.Snapshot{Users: records})
+}
+
 // Service 提供后台用户管理能力。
 type Service struct {
 	mu          sync.RWMutex
@@ -72,11 +124,20 @@ type Service struct {
 	protectedID string
 	now         func() time.Time
 	newID       func() string
-	store       *platformstate.FileStore
+	repository  UserRepository
 }
 
 // NewService 创建用户管理服务，并注入默认管理员。
 func NewService(cfg appconfig.AuthConfig, store *platformstate.FileStore) *Service {
+	var repository UserRepository
+	if store != nil {
+		repository = &fileStoreUserRepository{store: store}
+	}
+	return NewServiceWithRepository(cfg, repository)
+}
+
+// NewServiceWithRepository 创建基于指定仓储的用户管理服务。
+func NewServiceWithRepository(cfg appconfig.AuthConfig, repository UserRepository) *Service {
 	now := time.Now()
 	adminID := strings.TrimSpace(cfg.Bootstrap.UserID)
 	if adminID == "" {
@@ -98,19 +159,11 @@ func NewService(cfg appconfig.AuthConfig, store *platformstate.FileStore) *Servi
 		newID: func() string {
 			return "user_" + strings.ReplaceAll(guid.S(), "-", "")
 		},
-		store: store,
+		repository: repository,
 	}
-	if snapshot, err := service.loadSnapshot(); err == nil && len(snapshot.Users) > 0 {
-		for _, record := range snapshot.Users {
-			service.users[record.ID] = User{
-				ID:         record.ID,
-				Username:   record.Username,
-				Password:   record.Password,
-				Role:       record.Role,
-				Avatar:     record.Avatar,
-				CreateTime: record.CreateTime,
-				UpdateTime: record.UpdateTime,
-			}
+	if users, err := service.loadUsers(); err == nil && len(users) > 0 {
+		for _, user := range users {
+			service.users[user.ID] = user
 		}
 	}
 	if _, ok := service.users[admin.ID]; !ok {
@@ -119,11 +172,11 @@ func NewService(cfg appconfig.AuthConfig, store *platformstate.FileStore) *Servi
 	return service
 }
 
-func (s *Service) loadSnapshot() (platformstate.Snapshot, error) {
-	if s.store == nil {
-		return platformstate.Snapshot{}, nil
+func (s *Service) loadUsers() ([]User, error) {
+	if s.repository == nil {
+		return nil, nil
 	}
-	return s.store.Load()
+	return s.repository.LoadUsers()
 }
 
 // Page 分页查询用户。
@@ -314,25 +367,17 @@ func (s *Service) ChangePassword(id, currentPassword, newPassword string) error 
 }
 
 func (s *Service) persistLocked() error {
-	if s.store == nil {
+	if s.repository == nil {
 		return nil
 	}
-	records := make([]platformstate.UserRecord, 0, len(s.users))
+	users := make([]User, 0, len(s.users))
 	for _, user := range s.users {
-		records = append(records, platformstate.UserRecord{
-			ID:         user.ID,
-			Username:   user.Username,
-			Password:   user.Password,
-			Role:       user.Role,
-			Avatar:     user.Avatar,
-			CreateTime: user.CreateTime,
-			UpdateTime: user.UpdateTime,
-		})
+		users = append(users, user)
 	}
-	sort.Slice(records, func(i, j int) bool {
-		return records[i].CreateTime.Before(records[j].CreateTime)
+	sort.Slice(users, func(i, j int) bool {
+		return users[i].CreateTime.Before(users[j].CreateTime)
 	})
-	return s.store.Save(platformstate.Snapshot{Users: records})
+	return s.repository.SaveUsers(users)
 }
 
 func (s *Service) usernameExistsLocked(username, excludeID string) bool {
