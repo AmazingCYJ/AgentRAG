@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"testing"
 	"time"
 
 	appconfig "github.com/AmazingCYJ/AgentRAG/internal/platform/config"
 	"github.com/gogf/gf/v2/util/guid"
+	_ "modernc.org/sqlite"
 )
 
 func TestQueryTermMappingCRUDAndPaging(t *testing.T) {
@@ -211,5 +213,110 @@ func TestQueryTermMappingCRUDAndPaging(t *testing.T) {
 	}
 	if deleteBody.Code != "0" {
 		t.Fatalf("expected delete code 0, got %s", deleteBody.Code)
+	}
+}
+
+func TestQueryTermMappingPersistsThroughConfiguredDatabase(t *testing.T) {
+	dsn := filepath.Join(t.TempDir(), "agentrag.db")
+	cfg := appconfig.Config{
+		HTTP: appconfig.HTTPConfig{Port: 8080},
+		Auth: appconfig.AuthConfig{
+			JWTSecret: "test-secret",
+			TokenTTL:  time.Hour,
+			Bootstrap: appconfig.BootstrapUserConfig{
+				UserID:   "u_admin",
+				Username: "admin",
+				Password: "admin123",
+				Role:     "admin",
+			},
+		},
+		Database: appconfig.DatabaseConfig{
+			Driver: "sqlite",
+			DSN:    dsn,
+		},
+	}
+	server := newServer(&cfg, guid.S())
+	server.SetAddr("127.0.0.1:0")
+	if err := server.Start(); err != nil {
+		t.Fatalf("start server failed: %v", err)
+	}
+	time.Sleep(100 * time.Millisecond)
+
+	token := loginAndGetToken(t, server.GetListenedPort())
+	createPayload, _ := json.Marshal(map[string]any{
+		"sourceTerm": "财务系统",
+		"targetTerm": "Finance",
+		"matchType":  1,
+		"priority":   3,
+		"enabled":    true,
+		"remark":     "数据库持久化",
+	})
+	createRequest, err := http.NewRequest(
+		http.MethodPost,
+		fmt.Sprintf("http://127.0.0.1:%d/mappings", server.GetListenedPort()),
+		bytes.NewReader(createPayload),
+	)
+	if err != nil {
+		t.Fatalf("create mapping request failed: %v", err)
+	}
+	createRequest.Header.Set("Authorization", token)
+	createRequest.Header.Set("Content-Type", "application/json")
+	createResponse, err := http.DefaultClient.Do(createRequest)
+	if err != nil {
+		t.Fatalf("request create mapping failed: %v", err)
+	}
+	var createBody struct {
+		Code string `json:"code"`
+		Data string `json:"data"`
+	}
+	if err := json.NewDecoder(createResponse.Body).Decode(&createBody); err != nil {
+		createResponse.Body.Close()
+		t.Fatalf("decode create mapping failed: %v", err)
+	}
+	createResponse.Body.Close()
+	if createBody.Code != "0" || createBody.Data == "" {
+		t.Fatalf("unexpected create mapping response %#v", createBody)
+	}
+	server.Shutdown()
+
+	recreated := newServer(&cfg, guid.S())
+	recreated.SetAddr("127.0.0.1:0")
+	if err := recreated.Start(); err != nil {
+		t.Fatalf("start recreated server failed: %v", err)
+	}
+	defer recreated.Shutdown()
+	time.Sleep(100 * time.Millisecond)
+	recreatedToken := loginAndGetToken(t, recreated.GetListenedPort())
+	detailRequest, err := http.NewRequest(
+		http.MethodGet,
+		fmt.Sprintf("http://127.0.0.1:%d/mappings/%s", recreated.GetListenedPort(), createBody.Data),
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("create detail request failed: %v", err)
+	}
+	detailRequest.Header.Set("Authorization", recreatedToken)
+	detailResponse, err := http.DefaultClient.Do(detailRequest)
+	if err != nil {
+		t.Fatalf("request recreated mapping detail failed: %v", err)
+	}
+	defer detailResponse.Body.Close()
+
+	var detailBody struct {
+		Code string `json:"code"`
+		Data struct {
+			ID         string `json:"id"`
+			SourceTerm string `json:"sourceTerm"`
+			TargetTerm string `json:"targetTerm"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(detailResponse.Body).Decode(&detailBody); err != nil {
+		t.Fatalf("decode recreated mapping detail failed: %v", err)
+	}
+	if detailBody.Code != "0" || detailBody.Data.ID != createBody.Data {
+		t.Fatalf("unexpected recreated mapping detail %#v", detailBody)
+	}
+	if detailBody.Data.SourceTerm != "财务系统" || detailBody.Data.TargetTerm != "Finance" {
+		t.Fatalf("unexpected persisted mapping %#v", detailBody.Data)
 	}
 }

@@ -52,6 +52,64 @@ type SaveRequest struct {
 	Remark     string
 }
 
+// Repository 定义关键词映射持久化仓储。
+type Repository interface {
+	LoadQueryMappings() ([]Item, error)
+	SaveQueryMappings(items []Item) error
+}
+
+type fileStoreRepository struct {
+	store *platformstate.FileStore
+}
+
+func (r *fileStoreRepository) LoadQueryMappings() ([]Item, error) {
+	if r == nil || r.store == nil {
+		return nil, nil
+	}
+	snapshot, err := r.store.Load()
+	if err != nil {
+		return nil, err
+	}
+	items := make([]Item, 0, len(snapshot.QueryMappings))
+	for _, record := range snapshot.QueryMappings {
+		items = append(items, Item{
+			ID:         record.ID,
+			SourceTerm: record.SourceTerm,
+			TargetTerm: record.TargetTerm,
+			MatchType:  record.MatchType,
+			Priority:   record.Priority,
+			Enabled:    record.Enabled,
+			Remark:     record.Remark,
+			CreateTime: record.CreateTime,
+			UpdateTime: record.UpdateTime,
+		})
+	}
+	return items, nil
+}
+
+func (r *fileStoreRepository) SaveQueryMappings(items []Item) error {
+	if r == nil || r.store == nil {
+		return nil
+	}
+	records := make([]platformstate.QueryMappingRecord, 0, len(items))
+	for _, item := range items {
+		records = append(records, platformstate.QueryMappingRecord{
+			ID:         item.ID,
+			SourceTerm: item.SourceTerm,
+			TargetTerm: item.TargetTerm,
+			MatchType:  item.MatchType,
+			Priority:   item.Priority,
+			Enabled:    item.Enabled,
+			Remark:     item.Remark,
+			CreateTime: item.CreateTime,
+			UpdateTime: item.UpdateTime,
+		})
+	}
+	return r.store.Update(func(snapshot *platformstate.Snapshot) {
+		snapshot.QueryMappings = records
+	})
+}
+
 // Service 提供映射规则内存管理能力。
 type Service struct {
 	mu    sync.RWMutex
@@ -59,40 +117,39 @@ type Service struct {
 
 	now   func() time.Time
 	newID func() string
-	store *platformstate.FileStore
+	repo  Repository
 }
 
 // NewService 创建映射规则服务。
 func NewService(store *platformstate.FileStore) *Service {
+	var repo Repository
+	if store != nil {
+		repo = &fileStoreRepository{store: store}
+	}
+	return NewServiceWithRepository(repo)
+}
+
+// NewServiceWithRepository 创建基于指定仓储的映射规则服务。
+func NewServiceWithRepository(repo Repository) *Service {
 	service := &Service{
 		items: make(map[string]Item),
 		now:   time.Now,
 		newID: func() string { return strings.ReplaceAll(guid.S(), "-", "") },
-		store: store,
+		repo:  repo,
 	}
-	if snapshot, err := service.loadSnapshot(); err == nil {
-		for _, record := range snapshot.QueryMappings {
-			service.items[record.ID] = Item{
-				ID:         record.ID,
-				SourceTerm: record.SourceTerm,
-				TargetTerm: record.TargetTerm,
-				MatchType:  record.MatchType,
-				Priority:   record.Priority,
-				Enabled:    record.Enabled,
-				Remark:     record.Remark,
-				CreateTime: record.CreateTime,
-				UpdateTime: record.UpdateTime,
-			}
+	if items, err := service.loadItems(); err == nil {
+		for _, item := range items {
+			service.items[item.ID] = item
 		}
 	}
 	return service
 }
 
-func (s *Service) loadSnapshot() (platformstate.Snapshot, error) {
-	if s.store == nil {
-		return platformstate.Snapshot{}, nil
+func (s *Service) loadItems() ([]Item, error) {
+	if s.repo == nil {
+		return nil, nil
 	}
-	return s.store.Load()
+	return s.repo.LoadQueryMappings()
 }
 
 // Page 返回分页结果。
@@ -239,32 +296,20 @@ func (s *Service) Delete(id string) error {
 }
 
 func (s *Service) persistLocked() error {
-	if s.store == nil {
+	if s.repo == nil {
 		return nil
 	}
-	records := make([]platformstate.QueryMappingRecord, 0, len(s.items))
+	items := make([]Item, 0, len(s.items))
 	for _, item := range s.items {
-		records = append(records, platformstate.QueryMappingRecord{
-			ID:         item.ID,
-			SourceTerm: item.SourceTerm,
-			TargetTerm: item.TargetTerm,
-			MatchType:  item.MatchType,
-			Priority:   item.Priority,
-			Enabled:    item.Enabled,
-			Remark:     item.Remark,
-			CreateTime: item.CreateTime,
-			UpdateTime: item.UpdateTime,
-		})
+		items = append(items, item)
 	}
-	sort.Slice(records, func(i, j int) bool {
-		if records[i].Priority == records[j].Priority {
-			return records[i].CreateTime.Before(records[j].CreateTime)
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].Priority == items[j].Priority {
+			return items[i].CreateTime.Before(items[j].CreateTime)
 		}
-		return records[i].Priority < records[j].Priority
+		return items[i].Priority < items[j].Priority
 	})
-	return s.store.Update(func(snapshot *platformstate.Snapshot) {
-		snapshot.QueryMappings = records
-	})
+	return s.repo.SaveQueryMappings(items)
 }
 
 func normalizeMatchType(matchType int) int {

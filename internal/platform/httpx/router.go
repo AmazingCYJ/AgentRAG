@@ -139,7 +139,7 @@ func newServerWithDeps(cfg *appconfig.Config, name string, deps serverDeps) *ght
 	}
 	queryMappingService := deps.queryMappingService
 	if queryMappingService == nil {
-		queryMappingService = domainquerymapping.NewService(stateStore)
+		queryMappingService = newQueryMappingService(stateStore, database)
 	}
 	settingsService := deps.settingsService
 	if settingsService == nil {
@@ -274,6 +274,16 @@ func newSampleQuestionService(stateStore *platformstate.FileStore, database *sql
 		}
 	}
 	return domainsamplequestion.NewService(stateStore)
+}
+
+func newQueryMappingService(stateStore *platformstate.FileStore, database *sql.DB) *domainquerymapping.Service {
+	if database != nil {
+		repository := platformdb.NewSQLQueryMappingRepository(database)
+		if err := repository.Bootstrap(); err == nil {
+			return domainquerymapping.NewServiceWithRepository(repository)
+		}
+	}
+	return domainquerymapping.NewService(stateStore)
 }
 
 func buildMCPToolArguments(toolID, question string) map[string]any {
