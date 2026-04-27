@@ -2,6 +2,7 @@ package httpx
 
 import (
 	"context"
+	"database/sql"
 	domainauth "github.com/AmazingCYJ/AgentRAG/internal/domain/auth"
 	domainchat "github.com/AmazingCYJ/AgentRAG/internal/domain/chat"
 	domainconversation "github.com/AmazingCYJ/AgentRAG/internal/domain/conversation"
@@ -60,9 +61,10 @@ func newServerWithDeps(cfg *appconfig.Config, name string, deps serverDeps) *ght
 			stateStore = store
 		}
 	}
+	database := openConfiguredDatabase(cfg)
 	userService := deps.userService
 	if userService == nil {
-		userService = newUserService(cfg, stateStore)
+		userService = newUserService(cfg, stateStore, database)
 	}
 	authService := deps.authService
 	if authService == nil {
@@ -145,7 +147,7 @@ func newServerWithDeps(cfg *appconfig.Config, name string, deps serverDeps) *ght
 	}
 	sampleQuestionService := deps.sampleQuestionService
 	if sampleQuestionService == nil {
-		sampleQuestionService = domainsamplequestion.NewService(stateStore)
+		sampleQuestionService = newSampleQuestionService(stateStore, database)
 	}
 	authHandler := handlers.NewAuthHandler(authService)
 	chatHandler := handlers.NewChatHandler(authService, chatService)
@@ -237,22 +239,41 @@ func newServerWithDeps(cfg *appconfig.Config, name string, deps serverDeps) *ght
 	return server
 }
 
-func newUserService(cfg *appconfig.Config, stateStore *platformstate.FileStore) *domainusermgmt.Service {
+func openConfiguredDatabase(cfg *appconfig.Config) *sql.DB {
 	if cfg == nil {
-		return domainusermgmt.NewService(appconfig.AuthConfig{}, stateStore)
+		return nil
 	}
 	database, err := platformdb.OpenDatabase(platformdb.Config{
 		Driver: cfg.Database.Driver,
 		DSN:    cfg.Database.DSN,
 	})
-	if err == nil && database != nil {
+	if err != nil {
+		return nil
+	}
+	return database
+}
+
+func newUserService(cfg *appconfig.Config, stateStore *platformstate.FileStore, database *sql.DB) *domainusermgmt.Service {
+	if cfg == nil {
+		return domainusermgmt.NewService(appconfig.AuthConfig{}, stateStore)
+	}
+	if database != nil {
 		repository := platformdb.NewSQLUserRepository(database)
 		if err := repository.Bootstrap(); err == nil {
 			return domainusermgmt.NewServiceWithRepository(cfg.Auth, repository)
 		}
-		_ = database.Close()
 	}
 	return domainusermgmt.NewService(cfg.Auth, stateStore)
+}
+
+func newSampleQuestionService(stateStore *platformstate.FileStore, database *sql.DB) *domainsamplequestion.Service {
+	if database != nil {
+		repository := platformdb.NewSQLSampleQuestionRepository(database)
+		if err := repository.Bootstrap(); err == nil {
+			return domainsamplequestion.NewServiceWithRepository(repository)
+		}
+	}
+	return domainsamplequestion.NewService(stateStore)
 }
 
 func buildMCPToolArguments(toolID, question string) map[string]any {

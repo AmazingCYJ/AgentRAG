@@ -46,6 +46,58 @@ type SaveRequest struct {
 	Question    string
 }
 
+// Repository 定义示例问题持久化仓储。
+type Repository interface {
+	LoadSampleQuestions() ([]Item, error)
+	SaveSampleQuestions(items []Item) error
+}
+
+type fileStoreRepository struct {
+	store *platformstate.FileStore
+}
+
+func (r *fileStoreRepository) LoadSampleQuestions() ([]Item, error) {
+	if r == nil || r.store == nil {
+		return nil, nil
+	}
+	snapshot, err := r.store.Load()
+	if err != nil {
+		return nil, err
+	}
+	items := make([]Item, 0, len(snapshot.SampleQuestions))
+	for _, record := range snapshot.SampleQuestions {
+		items = append(items, Item{
+			ID:          record.ID,
+			Title:       record.Title,
+			Description: record.Description,
+			Question:    record.Question,
+			CreateTime:  record.CreateTime,
+			UpdateTime:  record.UpdateTime,
+		})
+	}
+	return items, nil
+}
+
+func (r *fileStoreRepository) SaveSampleQuestions(items []Item) error {
+	if r == nil || r.store == nil {
+		return nil
+	}
+	records := make([]platformstate.SampleQuestionRecord, 0, len(items))
+	for _, item := range items {
+		records = append(records, platformstate.SampleQuestionRecord{
+			ID:          item.ID,
+			Title:       item.Title,
+			Description: item.Description,
+			Question:    item.Question,
+			CreateTime:  item.CreateTime,
+			UpdateTime:  item.UpdateTime,
+		})
+	}
+	return r.store.Update(func(snapshot *platformstate.Snapshot) {
+		snapshot.SampleQuestions = records
+	})
+}
+
 // Service 提供示例问题内存存储能力。
 type Service struct {
 	mu    sync.RWMutex
@@ -53,11 +105,20 @@ type Service struct {
 
 	now   func() time.Time
 	newID func() string
-	store *platformstate.FileStore
+	repo  Repository
 }
 
 // NewService 创建示例问题服务，并注入默认欢迎页数据。
 func NewService(store *platformstate.FileStore) *Service {
+	var repo Repository
+	if store != nil {
+		repo = &fileStoreRepository{store: store}
+	}
+	return NewServiceWithRepository(repo)
+}
+
+// NewServiceWithRepository 创建基于指定仓储的示例问题服务。
+func NewServiceWithRepository(repo Repository) *Service {
 	now := time.Now()
 	service := &Service{
 		items: []Item{
@@ -90,29 +151,19 @@ func NewService(store *platformstate.FileStore) *Service {
 		newID: func() string {
 			return compactID(guid.S())
 		},
-		store: store,
+		repo: repo,
 	}
-	if snapshot, err := service.loadSnapshot(); err == nil && len(snapshot.SampleQuestions) > 0 {
-		service.items = make([]Item, 0, len(snapshot.SampleQuestions))
-		for _, record := range snapshot.SampleQuestions {
-			service.items = append(service.items, Item{
-				ID:          record.ID,
-				Title:       record.Title,
-				Description: record.Description,
-				Question:    record.Question,
-				CreateTime:  record.CreateTime,
-				UpdateTime:  record.UpdateTime,
-			})
-		}
+	if items, err := service.loadItems(); err == nil && len(items) > 0 {
+		service.items = items
 	}
 	return service
 }
 
-func (s *Service) loadSnapshot() (platformstate.Snapshot, error) {
-	if s.store == nil {
-		return platformstate.Snapshot{}, nil
+func (s *Service) loadItems() ([]Item, error) {
+	if s.repo == nil {
+		return nil, nil
 	}
-	return s.store.Load()
+	return s.repo.LoadSampleQuestions()
 }
 
 // ListWelcome 返回欢迎页所需的示例问题列表。
@@ -263,23 +314,12 @@ func (s *Service) Delete(id string) error {
 }
 
 func (s *Service) persistLocked() error {
-	if s.store == nil {
+	if s.repo == nil {
 		return nil
 	}
-	records := make([]platformstate.SampleQuestionRecord, 0, len(s.items))
-	for _, item := range s.items {
-		records = append(records, platformstate.SampleQuestionRecord{
-			ID:          item.ID,
-			Title:       item.Title,
-			Description: item.Description,
-			Question:    item.Question,
-			CreateTime:  item.CreateTime,
-			UpdateTime:  item.UpdateTime,
-		})
-	}
-	return s.store.Update(func(snapshot *platformstate.Snapshot) {
-		snapshot.SampleQuestions = records
-	})
+	items := make([]Item, len(s.items))
+	copy(items, s.items)
+	return s.repo.SaveSampleQuestions(items)
 }
 
 func compactID(raw string) string {
