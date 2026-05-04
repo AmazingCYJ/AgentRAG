@@ -87,7 +87,7 @@ func TestIntentTreeCRUDAndBatchActions(t *testing.T) {
 	})
 	updateRequest, err := http.NewRequest(
 		http.MethodPut,
-		fmt.Sprintf("http://127.0.0.1:%d/intent-tree/%d", server.GetListenedPort(), childID),
+		fmt.Sprintf("http://127.0.0.1:%d/intent-tree/%s", server.GetListenedPort(), childID),
 		bytes.NewReader(updatePayload),
 	)
 	if err != nil {
@@ -117,19 +117,19 @@ func TestIntentTreeCRUDAndBatchActions(t *testing.T) {
 		t.Fatalf("expected updated child name 请假审批, got %s", postUpdateTree[0].Children[0].Name)
 	}
 
-	runIntentBatchForTest(t, server.GetListenedPort(), token, "/intent-tree/batch/disable", []int{int(rootID), int(childID)})
+	runIntentBatchForTest(t, server.GetListenedPort(), token, "/intent-tree/batch/disable", []string{rootID, childID})
 	disabledTree := getIntentTreeForTest(t, server.GetListenedPort(), token)
 	if disabledTree[0].Enabled != 0 || disabledTree[0].Children[0].Enabled != 0 {
 		t.Fatal("expected nodes to be disabled")
 	}
 
-	runIntentBatchForTest(t, server.GetListenedPort(), token, "/intent-tree/batch/enable", []int{int(rootID), int(childID)})
+	runIntentBatchForTest(t, server.GetListenedPort(), token, "/intent-tree/batch/enable", []string{rootID, childID})
 	enabledTree := getIntentTreeForTest(t, server.GetListenedPort(), token)
 	if enabledTree[0].Enabled == 0 || enabledTree[0].Children[0].Enabled == 0 {
 		t.Fatal("expected nodes to be enabled")
 	}
 
-	runIntentBatchForTest(t, server.GetListenedPort(), token, "/intent-tree/batch/delete", []int{int(rootID)})
+	runIntentBatchForTest(t, server.GetListenedPort(), token, "/intent-tree/batch/delete", []string{rootID})
 	emptyTree := getIntentTreeForTest(t, server.GetListenedPort(), token)
 	if len(emptyTree) != 0 {
 		t.Fatalf("expected tree to be empty after delete, got %d roots", len(emptyTree))
@@ -137,14 +137,14 @@ func TestIntentTreeCRUDAndBatchActions(t *testing.T) {
 }
 
 type intentTreeNodeForTest struct {
-	ID         int                     `json:"id"`
-	IntentCode string                  `json:"intentCode"`
-	Name       string                  `json:"name"`
-	Enabled    int                     `json:"enabled"`
+	ID         string                 `json:"id"`
+	IntentCode string                 `json:"intentCode"`
+	Name       string                 `json:"name"`
+	Enabled    int                    `json:"enabled"`
 	Children   []intentTreeNodeForTest `json:"children"`
 }
 
-func createIntentNodeForTest(t *testing.T, port int, token string, payload map[string]any) int64 {
+func createIntentNodeForTest(t *testing.T, port int, token string, payload map[string]any) string {
 	t.Helper()
 
 	body, _ := json.Marshal(payload)
@@ -167,7 +167,7 @@ func createIntentNodeForTest(t *testing.T, port int, token string, payload map[s
 
 	var responseBody struct {
 		Code string `json:"code"`
-		Data int64  `json:"data"`
+		Data string `json:"data"`
 	}
 	if err := json.NewDecoder(response.Body).Decode(&responseBody); err != nil {
 		t.Fatalf("decode create intent node response failed: %v", err)
@@ -175,7 +175,7 @@ func createIntentNodeForTest(t *testing.T, port int, token string, payload map[s
 	if responseBody.Code != "0" {
 		t.Fatalf("expected create code 0, got %s", responseBody.Code)
 	}
-	if responseBody.Data == 0 {
+	if responseBody.Data == "" {
 		t.Fatal("expected created intent node id")
 	}
 	return responseBody.Data
@@ -197,7 +197,7 @@ func getIntentTreeForTest(t *testing.T, port int, token string) []intentTreeNode
 	defer response.Body.Close()
 
 	var body struct {
-		Code string                  `json:"code"`
+		Code string                 `json:"code"`
 		Data []intentTreeNodeForTest `json:"data"`
 	}
 	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
@@ -209,7 +209,7 @@ func getIntentTreeForTest(t *testing.T, port int, token string) []intentTreeNode
 	return body.Data
 }
 
-func runIntentBatchForTest(t *testing.T, port int, token, path string, ids []int) {
+func runIntentBatchForTest(t *testing.T, port int, token, path string, ids []string) {
 	t.Helper()
 
 	body, _ := json.Marshal(map[string]any{"ids": ids})

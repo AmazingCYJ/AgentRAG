@@ -9,24 +9,21 @@ import (
 	"time"
 
 	platformstate "github.com/AmazingCYJ/AgentRAG/internal/platform/state"
+	"github.com/gogf/gf/v2/util/guid"
 )
 
 var (
-	// ErrNodeNotFound 表示意图节点不存在。
-	ErrNodeNotFound = errors.New("意图节点不存在")
-	// ErrIntentCodeRequired 表示意图标识不能为空。
+	ErrNodeNotFound       = errors.New("意图节点不存在")
 	ErrIntentCodeRequired = errors.New("意图标识不能为空")
-	// ErrIntentNameRequired 表示节点名称不能为空。
 	ErrIntentNameRequired = errors.New("节点名称不能为空")
-	// ErrIntentCodeExists 表示意图标识已存在。
-	ErrIntentCodeExists = errors.New("意图标识已存在")
-	// ErrParentNotFound 表示父节点不存在。
-	ErrParentNotFound = errors.New("父节点不存在")
+	ErrIntentCodeExists   = errors.New("意图标识已存在")
+	ErrParentNotFound     = errors.New("父节点不存在")
 )
 
 // Node 表示内部意图节点。
 type Node struct {
-	ID                  int64
+	ID                  string
+	KBID                string
 	IntentCode          string
 	Name                string
 	Level               int
@@ -48,7 +45,7 @@ type Node struct {
 
 // TreeNode 定义前端树接口返回结构。
 type TreeNode struct {
-	ID                  int64      `json:"id"`
+	ID                  string     `json:"id"`
 	IntentCode          string     `json:"intentCode"`
 	Name                string     `json:"name"`
 	Level               int        `json:"level"`
@@ -112,63 +109,128 @@ type RouteHint struct {
 	Score          int
 }
 
-// Service 提供意图树内存管理能力。
-type Service struct {
-	mu     sync.RWMutex
-	nextID int64
-	nodes  map[int64]Node
-	store  *platformstate.FileStore
+// Repository 定义意图节点持久化仓储。
+type Repository interface {
+	Bootstrap() error
+	LoadNodes() ([]Node, error)
+	SaveNodes(nodes []Node) error
 }
 
-// NewService 创建意图树服务。
-func NewService(store *platformstate.FileStore) *Service {
-	service := &Service{
-		nextID: 1,
-		nodes:  make(map[int64]Node),
-		store:  store,
+type fileStoreRepository struct {
+	store *platformstate.FileStore
+}
+
+func (r *fileStoreRepository) Bootstrap() error { return nil }
+
+func (r *fileStoreRepository) LoadNodes() ([]Node, error) {
+	if r == nil || r.store == nil {
+		return nil, nil
 	}
-	if snapshot, err := service.loadSnapshot(); err == nil {
-		for _, record := range snapshot.IntentNodes {
-			service.nodes[record.ID] = Node{
-				ID:                  record.ID,
-				IntentCode:          record.IntentCode,
-				Name:                record.Name,
-				Level:               record.Level,
-				ParentCode:          record.ParentCode,
-				Description:         record.Description,
-				Examples:            normalizeExamples(record.Examples),
-				CollectionName:      record.CollectionName,
-				MCPToolID:           record.MCPToolID,
-				TopK:                cloneIntPointer(record.TopK),
-				Kind:                record.Kind,
-				SortOrder:           record.SortOrder,
-				Enabled:             record.Enabled,
-				PromptSnippet:       record.PromptSnippet,
-				PromptTemplate:      record.PromptTemplate,
-				ParamPromptTemplate: record.ParamPromptTemplate,
-				CreateTime:          record.CreateTime,
-				UpdateTime:          record.UpdateTime,
-			}
-			if record.ID >= service.nextID {
-				service.nextID = record.ID + 1
+	snapshot, err := r.store.Load()
+	if err != nil {
+		return nil, err
+	}
+	nodes := make([]Node, 0, len(snapshot.IntentNodes))
+	for _, record := range snapshot.IntentNodes {
+		nodes = append(nodes, Node{
+			ID:                  record.ID,
+			KBID:                record.KBID,
+			IntentCode:          record.IntentCode,
+			Name:                record.Name,
+			Level:               record.Level,
+			ParentCode:          record.ParentCode,
+			Description:         record.Description,
+			Examples:            normalizeExamples(record.Examples),
+			CollectionName:      record.CollectionName,
+			MCPToolID:           record.MCPToolID,
+			TopK:                cloneIntPointer(record.TopK),
+			Kind:                record.Kind,
+			SortOrder:           record.SortOrder,
+			Enabled:             record.Enabled,
+			PromptSnippet:       record.PromptSnippet,
+			PromptTemplate:      record.PromptTemplate,
+			ParamPromptTemplate: record.ParamPromptTemplate,
+			CreateTime:          record.CreateTime,
+			UpdateTime:          record.UpdateTime,
+		})
+	}
+	return nodes, nil
+}
+
+func (r *fileStoreRepository) SaveNodes(nodes []Node) error {
+	if r == nil || r.store == nil {
+		return nil
+	}
+	records := make([]platformstate.IntentNodeRecord, 0, len(nodes))
+	for _, node := range nodes {
+		records = append(records, platformstate.IntentNodeRecord{
+			ID:                  node.ID,
+			KBID:                node.KBID,
+			IntentCode:          node.IntentCode,
+			Name:                node.Name,
+			Level:               node.Level,
+			ParentCode:          node.ParentCode,
+			Description:         node.Description,
+			Examples:            normalizeExamples(node.Examples),
+			CollectionName:      node.CollectionName,
+			MCPToolID:           node.MCPToolID,
+			TopK:                cloneIntPointer(node.TopK),
+			Kind:                node.Kind,
+			SortOrder:           node.SortOrder,
+			Enabled:             node.Enabled,
+			PromptSnippet:       node.PromptSnippet,
+			PromptTemplate:      node.PromptTemplate,
+			ParamPromptTemplate: node.ParamPromptTemplate,
+			CreateTime:          node.CreateTime,
+			UpdateTime:          node.UpdateTime,
+		})
+	}
+	sort.Slice(records, func(i, j int) bool {
+		return records[i].CreateTime.Before(records[j].CreateTime)
+	})
+	return r.store.Update(func(snapshot *platformstate.Snapshot) {
+		snapshot.IntentNodes = records
+	})
+}
+
+// Service 提供意图树内存管理能力。
+type Service struct {
+	mu    sync.RWMutex
+	nodes map[string]Node
+	newID func() string
+	repo  Repository
+}
+
+// NewService 创建意图树服务（使用 JSON 文件持久化）。
+func NewService(store *platformstate.FileStore) *Service {
+	var repo Repository
+	if store != nil {
+		repo = &fileStoreRepository{store: store}
+	}
+	return NewServiceWithRepository(repo)
+}
+
+// NewServiceWithRepository 创建基于指定仓储的意图树服务。
+func NewServiceWithRepository(repo Repository) *Service {
+	svc := &Service{
+		nodes: make(map[string]Node),
+		newID: func() string { return strings.ReplaceAll(guid.S(), "-", "") },
+		repo:  repo,
+	}
+	if repo != nil {
+		if nodes, err := repo.LoadNodes(); err == nil {
+			for _, node := range nodes {
+				svc.nodes[node.ID] = node
 			}
 		}
 	}
-	return service
-}
-
-func (s *Service) loadSnapshot() (platformstate.Snapshot, error) {
-	if s.store == nil {
-		return platformstate.Snapshot{}, nil
-	}
-	return s.store.Load()
+	return svc
 }
 
 // GetFullTree 返回完整意图树。
 func (s *Service) GetFullTree() []TreeNode {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-
 	return buildTree(s.nodes)
 }
 
@@ -212,32 +274,32 @@ func (s *Service) MatchQuestion(question string) RouteHint {
 }
 
 // CreateNode 创建新的意图节点。
-func (s *Service) CreateNode(req CreateRequest) (int64, error) {
+func (s *Service) CreateNode(req CreateRequest) (string, error) {
 	intentCode := strings.TrimSpace(req.IntentCode)
 	if intentCode == "" {
-		return 0, ErrIntentCodeRequired
+		return "", ErrIntentCodeRequired
 	}
 	name := strings.TrimSpace(req.Name)
 	if name == "" {
-		return 0, ErrIntentNameRequired
+		return "", ErrIntentNameRequired
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.hasIntentCodeLocked(intentCode, 0) {
-		return 0, ErrIntentCodeExists
+	if s.hasIntentCodeLocked(intentCode, "") {
+		return "", ErrIntentCodeExists
 	}
 	parentCode := strings.TrimSpace(req.ParentCode)
 	if parentCode != "" && !s.hasIntentCodeValueLocked(parentCode) {
-		return 0, ErrParentNotFound
+		return "", ErrParentNotFound
 	}
 
-	id := s.nextID
-	s.nextID++
+	id := s.newID()
 	now := time.Now()
 	node := Node{
 		ID:                  id,
+		KBID:                strings.TrimSpace(req.KBID),
 		IntentCode:          intentCode,
 		Name:                name,
 		Level:               req.Level,
@@ -258,13 +320,13 @@ func (s *Service) CreateNode(req CreateRequest) (int64, error) {
 	}
 	s.nodes[id] = node
 	if err := s.persistLocked(); err != nil {
-		return 0, err
+		return "", err
 	}
 	return id, nil
 }
 
 // UpdateNode 更新指定意图节点。
-func (s *Service) UpdateNode(id int64, req UpdateRequest) error {
+func (s *Service) UpdateNode(id string, req UpdateRequest) error {
 	name := strings.TrimSpace(req.Name)
 	if name == "" {
 		return ErrIntentNameRequired
@@ -298,14 +360,11 @@ func (s *Service) UpdateNode(id int64, req UpdateRequest) error {
 	node.ParamPromptTemplate = strings.TrimSpace(req.ParamPromptTemplate)
 	node.UpdateTime = time.Now()
 	s.nodes[id] = node
-	if err := s.persistLocked(); err != nil {
-		return err
-	}
-	return nil
+	return s.persistLocked()
 }
 
 // DeleteNode 删除指定节点及其子节点。
-func (s *Service) DeleteNode(id int64) error {
+func (s *Service) DeleteNode(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -313,24 +372,21 @@ func (s *Service) DeleteNode(id int64) error {
 		return ErrNodeNotFound
 	}
 	s.deleteNodeAndChildrenLocked(id)
-	if err := s.persistLocked(); err != nil {
-		return err
-	}
-	return nil
+	return s.persistLocked()
 }
 
 // BatchEnableNodes 批量启用节点。
-func (s *Service) BatchEnableNodes(ids []int64) {
+func (s *Service) BatchEnableNodes(ids []string) {
 	s.batchUpdateEnabled(ids, 1)
 }
 
 // BatchDisableNodes 批量停用节点。
-func (s *Service) BatchDisableNodes(ids []int64) {
+func (s *Service) BatchDisableNodes(ids []string) {
 	s.batchUpdateEnabled(ids, 0)
 }
 
 // BatchDeleteNodes 批量删除节点。
-func (s *Service) BatchDeleteNodes(ids []int64) {
+func (s *Service) BatchDeleteNodes(ids []string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -342,7 +398,7 @@ func (s *Service) BatchDeleteNodes(ids []int64) {
 	_ = s.persistLocked()
 }
 
-func (s *Service) batchUpdateEnabled(ids []int64, enabled int) {
+func (s *Service) batchUpdateEnabled(ids []string, enabled int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -358,7 +414,7 @@ func (s *Service) batchUpdateEnabled(ids []int64, enabled int) {
 	_ = s.persistLocked()
 }
 
-func (s *Service) deleteNodeAndChildrenLocked(id int64) {
+func (s *Service) deleteNodeAndChildrenLocked(id string) {
 	intentCode := s.nodes[id].IntentCode
 	delete(s.nodes, id)
 	for childID, node := range s.nodes {
@@ -368,7 +424,7 @@ func (s *Service) deleteNodeAndChildrenLocked(id int64) {
 	}
 }
 
-func (s *Service) hasIntentCodeLocked(intentCode string, excludeID int64) bool {
+func (s *Service) hasIntentCodeLocked(intentCode string, excludeID string) bool {
 	for id, node := range s.nodes {
 		if id == excludeID {
 			continue
@@ -389,7 +445,7 @@ func (s *Service) hasIntentCodeValueLocked(intentCode string) bool {
 	return false
 }
 
-func buildTree(nodes map[int64]Node) []TreeNode {
+func buildTree(nodes map[string]Node) []TreeNode {
 	if len(nodes) == 0 {
 		return []TreeNode{}
 	}
@@ -543,36 +599,12 @@ func appendIntentNGrams(target *[]string, runes []rune, size int) {
 }
 
 func (s *Service) persistLocked() error {
-	if s.store == nil {
+	if s.repo == nil {
 		return nil
 	}
-	records := make([]platformstate.IntentNodeRecord, 0, len(s.nodes))
+	nodes := make([]Node, 0, len(s.nodes))
 	for _, node := range s.nodes {
-		records = append(records, platformstate.IntentNodeRecord{
-			ID:                  node.ID,
-			IntentCode:          node.IntentCode,
-			Name:                node.Name,
-			Level:               node.Level,
-			ParentCode:          node.ParentCode,
-			Description:         node.Description,
-			Examples:            normalizeExamples(node.Examples),
-			CollectionName:      node.CollectionName,
-			MCPToolID:           node.MCPToolID,
-			TopK:                cloneIntPointer(node.TopK),
-			Kind:                node.Kind,
-			SortOrder:           node.SortOrder,
-			Enabled:             node.Enabled,
-			PromptSnippet:       node.PromptSnippet,
-			PromptTemplate:      node.PromptTemplate,
-			ParamPromptTemplate: node.ParamPromptTemplate,
-			CreateTime:          node.CreateTime,
-			UpdateTime:          node.UpdateTime,
-		})
+		nodes = append(nodes, node)
 	}
-	sort.Slice(records, func(i, j int) bool {
-		return records[i].ID < records[j].ID
-	})
-	return s.store.Update(func(snapshot *platformstate.Snapshot) {
-		snapshot.IntentNodes = records
-	})
+	return s.repo.SaveNodes(nodes)
 }

@@ -42,7 +42,7 @@ func TestIntentTreePersistsAcrossServiceRecreation(t *testing.T) {
 		t.Fatalf("expected 1 root node, got %d", len(tree))
 	}
 	if tree[0].ID != rootID {
-		t.Fatalf("expected recreated root id %d, got %d", rootID, tree[0].ID)
+		t.Fatalf("expected recreated root id %s, got %s", rootID, tree[0].ID)
 	}
 	if len(tree[0].Children) != 1 {
 		t.Fatalf("expected 1 child node, got %d", len(tree[0].Children))

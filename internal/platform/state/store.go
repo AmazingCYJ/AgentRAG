@@ -44,7 +44,8 @@ type QueryMappingRecord struct {
 
 // IntentNodeRecord 定义持久化到磁盘的意图节点记录。
 type IntentNodeRecord struct {
-	ID                  int64     `json:"id"`
+	ID                  string    `json:"id"`
+	KBID                string    `json:"kbId,omitempty"`
 	IntentCode          string    `json:"intentCode"`
 	Name                string    `json:"name"`
 	Level               int       `json:"level"`
@@ -167,7 +168,6 @@ type RagTraceRunRecord struct {
 	ConversationID string    `json:"conversationId,omitempty"`
 	TaskID         string    `json:"taskId,omitempty"`
 	UserName       string    `json:"userName,omitempty"`
-	Username       string    `json:"username,omitempty"`
 	UserID         string    `json:"userId,omitempty"`
 	Status         string    `json:"status,omitempty"`
 	ErrorMessage   string    `json:"errorMessage,omitempty"`

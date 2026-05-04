@@ -264,7 +264,6 @@ func (s *Service) recordTrace(
 		ConversationID: conversationID,
 		TaskID:         taskID,
 		UserName:       req.Username,
-		Username:       req.Username,
 		UserID:         req.UserID,
 		Status:         status,
 		ErrorMessage:   errorMessage,

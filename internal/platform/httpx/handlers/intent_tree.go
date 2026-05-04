@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"strconv"
 
 	domainauth "github.com/AmazingCYJ/AgentRAG/internal/domain/auth"
 	domainintenttree "github.com/AmazingCYJ/AgentRAG/internal/domain/intenttree"
@@ -46,7 +45,7 @@ type intentNodeSaveRequest struct {
 }
 
 type intentNodeBatchRequest struct {
-	IDs []int64 `json:"ids"`
+	IDs []string `json:"ids"`
 }
 
 // Tree 返回完整意图树。
@@ -100,8 +99,8 @@ func (h *IntentTreeHandler) UpdateNode(r *ghttp.Request) {
 		resp.WriteError(r, http.StatusUnauthorized, "401", "未登录")
 		return
 	}
-	id, err := strconv.ParseInt(r.Get("id").String(), 10, 64)
-	if err != nil {
+	id := r.Get("id").String()
+	if id == "" {
 		resp.WriteError(r, http.StatusBadRequest, "400", "节点ID错误")
 		return
 	}
@@ -111,7 +110,7 @@ func (h *IntentTreeHandler) UpdateNode(r *ghttp.Request) {
 		return
 	}
 
-	err = h.intentTreeService.UpdateNode(id, domainintenttree.UpdateRequest{
+	err := h.intentTreeService.UpdateNode(id, domainintenttree.UpdateRequest{
 		Name:                req.Name,
 		Level:               req.Level,
 		ParentCode:          req.ParentCode,
@@ -140,8 +139,8 @@ func (h *IntentTreeHandler) DeleteNode(r *ghttp.Request) {
 		resp.WriteError(r, http.StatusUnauthorized, "401", "未登录")
 		return
 	}
-	id, err := strconv.ParseInt(r.Get("id").String(), 10, 64)
-	if err != nil {
+	id := r.Get("id").String()
+	if id == "" {
 		resp.WriteError(r, http.StatusBadRequest, "400", "节点ID错误")
 		return
 	}
@@ -154,26 +153,26 @@ func (h *IntentTreeHandler) DeleteNode(r *ghttp.Request) {
 
 // BatchEnable 批量启用节点。
 func (h *IntentTreeHandler) BatchEnable(r *ghttp.Request) {
-	h.handleBatchUpdate(r, func(ids []int64) {
+	h.handleBatchUpdate(r, func(ids []string) {
 		h.intentTreeService.BatchEnableNodes(ids)
 	})
 }
 
 // BatchDisable 批量停用节点。
 func (h *IntentTreeHandler) BatchDisable(r *ghttp.Request) {
-	h.handleBatchUpdate(r, func(ids []int64) {
+	h.handleBatchUpdate(r, func(ids []string) {
 		h.intentTreeService.BatchDisableNodes(ids)
 	})
 }
 
 // BatchDelete 批量删除节点。
 func (h *IntentTreeHandler) BatchDelete(r *ghttp.Request) {
-	h.handleBatchUpdate(r, func(ids []int64) {
+	h.handleBatchUpdate(r, func(ids []string) {
 		h.intentTreeService.BatchDeleteNodes(ids)
 	})
 }
 
-func (h *IntentTreeHandler) handleBatchUpdate(r *ghttp.Request, action func(ids []int64)) {
+func (h *IntentTreeHandler) handleBatchUpdate(r *ghttp.Request, action func(ids []string)) {
 	if _, err := h.authService.CurrentUser(r.GetHeader("Authorization")); err != nil {
 		resp.WriteError(r, http.StatusUnauthorized, "401", "未登录")
 		return

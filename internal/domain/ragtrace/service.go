@@ -25,7 +25,6 @@ type Run struct {
 	ConversationID string    `json:"conversationId,omitempty"`
 	TaskID         string    `json:"taskId,omitempty"`
 	UserName       string    `json:"userName,omitempty"`
-	Username       string    `json:"username,omitempty"`
 	UserID         string    `json:"userId,omitempty"`
 	Status         string    `json:"status,omitempty"`
 	ErrorMessage   string    `json:"errorMessage,omitempty"`
@@ -82,7 +81,6 @@ type ChatTraceRecord struct {
 	ConversationID string
 	TaskID         string
 	UserName       string
-	Username       string
 	UserID         string
 	Status         string
 	ErrorMessage   string
@@ -132,7 +130,6 @@ func NewService(store *platformstate.FileStore) *Service {
 				ConversationID: run.ConversationID,
 				TaskID:         run.TaskID,
 				UserName:       run.UserName,
-				Username:       run.Username,
 				UserID:         run.UserID,
 				Status:         run.Status,
 				ErrorMessage:   run.ErrorMessage,
@@ -285,7 +282,6 @@ func (s *Service) RecordChatTrace(record ChatTraceRecord) string {
 		ConversationID: strings.TrimSpace(record.ConversationID),
 		TaskID:         strings.TrimSpace(record.TaskID),
 		UserName:       strings.TrimSpace(record.UserName),
-		Username:       strings.TrimSpace(record.Username),
 		UserID:         strings.TrimSpace(record.UserID),
 		Status:         normalizeStatus(record.Status),
 		ErrorMessage:   strings.TrimSpace(record.ErrorMessage),
@@ -320,9 +316,8 @@ func (s *Service) seed() {
 		ConversationID: "conv_seed_demo",
 		TaskID:         "task_seed_demo",
 		UserName:       "admin",
-		Username:       "admin",
 		UserID:         "u_admin",
-		Status:         "success",
+		Status:         "SUCCESS",
 		DurationMs:     1280,
 		StartTime:      now,
 		EndTime:        now.Add(1280 * time.Millisecond),
@@ -336,7 +331,7 @@ func (s *Service) seed() {
 			NodeName:   "Chat Entry",
 			ClassName:  "RAGChatController",
 			MethodName: "chat",
-			Status:     "success",
+			Status:     "SUCCESS",
 			DurationMs: 1280,
 			StartTime:  run.StartTime,
 			EndTime:    run.EndTime,
@@ -350,7 +345,7 @@ func (s *Service) seed() {
 			NodeName:     "Generate Response",
 			ClassName:    "RAGChatService",
 			MethodName:   "streamChat",
-			Status:       "success",
+			Status:       "SUCCESS",
 			DurationMs:   1180,
 			StartTime:    run.StartTime.Add(100 * time.Millisecond),
 			EndTime:      run.EndTime,
@@ -388,13 +383,13 @@ func containsFold(value, keyword string) bool {
 }
 
 func normalizeStatus(status string) string {
-	value := strings.ToLower(strings.TrimSpace(status))
+	value := strings.ToUpper(strings.TrimSpace(status))
 	switch value {
-	case "success", "failed", "running":
+	case "SUCCESS", "FAILED", "RUNNING":
 		return value
 	default:
 		if value == "" {
-			return "success"
+			return "SUCCESS"
 		}
 		return value
 	}
@@ -505,7 +500,7 @@ func buildChatNodes(traceID string, run Run, deepThinking bool, steps []ChatTrac
 			step.NodeID,
 			stepOffset,
 			duration,
-			defaultString(step.Status, "success"),
+			defaultString(step.Status, "SUCCESS"),
 			step.Detail,
 		))
 		stepOffset += duration
@@ -541,7 +536,6 @@ func (s *Service) persistLocked() error {
 			ConversationID: run.ConversationID,
 			TaskID:         run.TaskID,
 			UserName:       run.UserName,
-			Username:       run.Username,
 			UserID:         run.UserID,
 			Status:         run.Status,
 			ErrorMessage:   run.ErrorMessage,

@@ -88,7 +88,7 @@ func newServerWithDeps(cfg *appconfig.Config, name string, deps serverDeps) *ght
 	}
 	intentTreeService := deps.intentTreeService
 	if intentTreeService == nil {
-		intentTreeService = domainintenttree.NewService(stateStore)
+		intentTreeService = newIntentTreeService(stateStore, database)
 	}
 	chatService := deps.chatService
 	if chatService == nil {
@@ -274,6 +274,16 @@ func newSampleQuestionService(stateStore *platformstate.FileStore, database *sql
 		}
 	}
 	return domainsamplequestion.NewService(stateStore)
+}
+
+func newIntentTreeService(stateStore *platformstate.FileStore, database *sql.DB) *domainintenttree.Service {
+	if database != nil {
+		repository := platformdb.NewSQLIntentTreeRepository(database)
+		if err := repository.Bootstrap(); err == nil {
+			return domainintenttree.NewServiceWithRepository(repository)
+		}
+	}
+	return domainintenttree.NewService(stateStore)
 }
 
 func newQueryMappingService(stateStore *platformstate.FileStore, database *sql.DB) *domainquerymapping.Service {
