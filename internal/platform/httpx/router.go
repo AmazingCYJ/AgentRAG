@@ -166,6 +166,7 @@ func newServerWithDeps(cfg *appconfig.Config, name string, deps serverDeps) *ght
 	sampleQuestionHandler := handlers.NewSampleQuestionHandler(authService, sampleQuestionService)
 	userAdminHandler := handlers.NewUserAdminHandler(authService, userService)
 	bindAPIHandler(server, "/health", handlers.Health)
+	bindAPIHandler(server, "POST:/mcp", ghttp.WrapH(mcpserver.NewEndpointHandler(mcpserver.NewRegistry())))
 	bindAPIHandler(server, "/auth/login", authHandler.Login)
 	bindAPIHandler(server, "/auth/logout", authHandler.Logout)
 	bindAPIHandler(server, "/user/me", authHandler.CurrentUser)

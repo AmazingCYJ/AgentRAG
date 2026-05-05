@@ -139,32 +139,48 @@ func (r *Registry) GetExecutor(toolID string) (ToolExecutor, bool) {
 func NewHTTPHandler() http.Handler {
 	registry := NewRegistry()
 	mux := http.NewServeMux()
-	mux.HandleFunc("/mcp", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			w.WriteHeader(http.StatusMethodNotAllowed)
-			return
-		}
-
-		var request JSONRPCRequest
-		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-			writeJSON(w, http.StatusBadRequest, JSONRPCResponse{
-				JSONRPC: jsonRPCVersion,
-				Error: &JSONRPCError{
-					Code:    invalidParamsCode,
-					Message: "invalid request body",
-				},
-			})
-			return
-		}
-
-		response := dispatch(registry, request)
-		if response == nil {
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
-		writeJSON(w, http.StatusOK, response)
-	})
+	mux.Handle("/mcp", NewEndpointHandler(registry))
 	return mux
+}
+
+// NewEndpointHandler 创建单个 /mcp JSON-RPC 端点处理器。
+func NewEndpointHandler(registry *Registry) http.Handler {
+	if registry == nil {
+		registry = NewRegistry()
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ServeEndpoint(w, r, registry)
+	})
+}
+
+// ServeEndpoint 处理 MCP JSON-RPC HTTP 请求。
+func ServeEndpoint(w http.ResponseWriter, r *http.Request, registry *Registry) {
+	if registry == nil {
+		registry = NewRegistry()
+	}
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	var request JSONRPCRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		writeJSON(w, http.StatusBadRequest, JSONRPCResponse{
+			JSONRPC: jsonRPCVersion,
+			Error: &JSONRPCError{
+				Code:    invalidParamsCode,
+				Message: "invalid request body",
+			},
+		})
+		return
+	}
+
+	response := dispatch(registry, request)
+	if response == nil {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 func dispatch(registry *Registry, request JSONRPCRequest) *JSONRPCResponse {
