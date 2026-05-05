@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	platformstate "github.com/AmazingCYJ/AgentRAG/internal/platform/state"
 )
@@ -109,5 +110,115 @@ func TestBuildPromptContextReturnsRelevantChunks(t *testing.T) {
 	}
 	if !strings.Contains(contextText, "审批中心") {
 		t.Fatalf("expected context to contain chunk content, got %s", contextText)
+	}
+}
+
+type memoryKnowledgeRepository struct {
+	bases  []KnowledgeBase
+	docs   []KnowledgeDocument
+	chunks []KnowledgeChunk
+	logs   []KnowledgeDocumentChunkLog
+}
+
+func (r *memoryKnowledgeRepository) LoadKnowledgeRecords() ([]KnowledgeBase, []KnowledgeDocument, []KnowledgeChunk, []KnowledgeDocumentChunkLog, error) {
+	return r.bases, r.docs, r.chunks, r.logs, nil
+}
+
+func (r *memoryKnowledgeRepository) SaveKnowledgeRecords(bases []KnowledgeBase, docs []KnowledgeDocument, chunks []KnowledgeChunk, logs []KnowledgeDocumentChunkLog) error {
+	r.bases = append([]KnowledgeBase(nil), bases...)
+	r.docs = append([]KnowledgeDocument(nil), docs...)
+	r.chunks = append([]KnowledgeChunk(nil), chunks...)
+	r.logs = append([]KnowledgeDocumentChunkLog(nil), logs...)
+	return nil
+}
+
+func TestKnowledgeServiceLoadsAndPersistsThroughRepository(t *testing.T) {
+	now := time.Date(2026, 5, 3, 10, 0, 0, 0, time.UTC)
+	repository := &memoryKnowledgeRepository{
+		bases: []KnowledgeBase{
+			{
+				ID:             "kb_existing",
+				Name:           "已有知识库",
+				EmbeddingModel: "embedding-openai-large",
+				CollectionName: "existingdocs",
+				CreatedBy:      "admin",
+				CreateTime:     now,
+				UpdateTime:     now,
+			},
+		},
+		docs: []KnowledgeDocument{
+			{
+				ID:            "doc_existing",
+				KBID:          "kb_existing",
+				DocName:       "已有文档.md",
+				SourceType:    "file",
+				Enabled:       true,
+				ChunkCount:    1,
+				FileType:      "md",
+				ProcessMode:   "chunk",
+				ChunkStrategy: "structure_aware",
+				Status:        "success",
+				CreatedBy:     "admin",
+				UpdatedBy:     "admin",
+				CreateTime:    now,
+				UpdateTime:    now,
+			},
+		},
+		chunks: []KnowledgeChunk{
+			{
+				ID:          "chunk_existing",
+				KBID:        "kb_existing",
+				DocID:       "doc_existing",
+				ChunkIndex:  0,
+				Content:     "已有 Chunk 内容",
+				ContentHash: "hash_existing",
+				CharCount:   10,
+				TokenCount:  3,
+				Enabled:     1,
+				CreateTime:  now,
+				UpdateTime:  now,
+			},
+		},
+		logs: []KnowledgeDocumentChunkLog{
+			{
+				ID:         "log_existing",
+				DocID:      "doc_existing",
+				Status:     "success",
+				ChunkCount: 1,
+				CreateTime: now,
+			},
+		},
+	}
+
+	service := NewServiceWithRepository(repository)
+	loadedKB, err := service.GetKnowledgeBase("kb_existing")
+	if err != nil {
+		t.Fatalf("load knowledge base failed: %v", err)
+	}
+	if loadedKB.Name != "已有知识库" || loadedKB.DocumentCount != 1 {
+		t.Fatalf("unexpected loaded knowledge base %#v", loadedKB)
+	}
+	loadedChunks, err := service.PageChunks("doc_existing", KnowledgeChunkPageRequest{Current: 1, Size: 10})
+	if err != nil {
+		t.Fatalf("page loaded chunks failed: %v", err)
+	}
+	if loadedChunks.Total != 1 {
+		t.Fatalf("expected 1 loaded chunk, got %d", loadedChunks.Total)
+	}
+
+	kbID, err := service.CreateKnowledgeBase(KnowledgeBaseCreateRequest{
+		Name:           "新增知识库",
+		EmbeddingModel: "embedding-local-bge",
+		CollectionName: "newdocs",
+		CreatedBy:      "admin",
+	})
+	if err != nil {
+		t.Fatalf("create knowledge base failed: %v", err)
+	}
+	if kbID == "" {
+		t.Fatal("expected new knowledge base id")
+	}
+	if len(repository.bases) != 2 {
+		t.Fatalf("expected repository to save 2 knowledge bases, got %d", len(repository.bases))
 	}
 }

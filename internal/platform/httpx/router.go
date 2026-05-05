@@ -85,7 +85,7 @@ func newServerWithDeps(cfg *appconfig.Config, name string, deps serverDeps) *ght
 	}
 	knowledgeService := deps.knowledgeService
 	if knowledgeService == nil {
-		knowledgeService = domainknowledge.NewService(stateStore)
+		knowledgeService = newKnowledgeService(stateStore, database)
 	}
 	intentTreeService := deps.intentTreeService
 	if intentTreeService == nil {
@@ -340,6 +340,16 @@ func newRagTraceService(stateStore *platformstate.FileStore, database *sql.DB) *
 		}
 	}
 	return domainragtrace.NewService(stateStore)
+}
+
+func newKnowledgeService(stateStore *platformstate.FileStore, database *sql.DB) *domainknowledge.Service {
+	if database != nil {
+		repository := platformdb.NewSQLKnowledgeRepository(database)
+		if err := repository.Bootstrap(); err == nil {
+			return domainknowledge.NewServiceWithRepository(repository)
+		}
+	}
+	return domainknowledge.NewService(stateStore)
 }
 
 func buildMCPToolArguments(toolID, question string) map[string]any {

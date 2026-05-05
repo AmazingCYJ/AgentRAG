@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"mime/multipart"
 	"net/http"
+	"path/filepath"
 	"testing"
 	"time"
 
 	appconfig "github.com/AmazingCYJ/AgentRAG/internal/platform/config"
 	"github.com/gogf/gf/v2/util/guid"
+	_ "modernc.org/sqlite"
 )
 
 func TestKnowledgeBaseCRUDAndChunkStrategies(t *testing.T) {
@@ -678,6 +680,103 @@ func TestKnowledgeDocumentAndChunkLifecycle(t *testing.T) {
 	}
 	if deleteDocBody.Code != "0" {
 		t.Fatalf("expected delete doc code 0, got %s", deleteDocBody.Code)
+	}
+}
+
+func TestKnowledgeDataPersistsThroughConfiguredDatabase(t *testing.T) {
+	dsn := filepath.Join(t.TempDir(), "agentrag.db")
+	cfg := &appconfig.Config{
+		HTTP: appconfig.HTTPConfig{Port: 8080},
+		Auth: appconfig.AuthConfig{
+			JWTSecret: "test-secret",
+			TokenTTL:  time.Hour,
+			Bootstrap: appconfig.BootstrapUserConfig{
+				UserID:   "u_admin",
+				Username: "admin",
+				Password: "admin123",
+				Role:     "admin",
+			},
+		},
+		Database: appconfig.DatabaseConfig{
+			Driver: "sqlite",
+			DSN:    dsn,
+		},
+	}
+
+	server := newServer(cfg, guid.S())
+	server.SetAddr("127.0.0.1:0")
+	if err := server.Start(); err != nil {
+		t.Fatalf("start server failed: %v", err)
+	}
+	time.Sleep(100 * time.Millisecond)
+
+	token := loginAndGetToken(t, server.GetListenedPort())
+	kbID := createKnowledgeBaseForTest(t, server.GetListenedPort(), token, map[string]any{
+		"name":           "SQL 产品文档库",
+		"embeddingModel": "embedding-openai-large",
+		"collectionName": "sqlproductdocs",
+	})
+	docID := uploadKnowledgeDocumentForTest(t, server.GetListenedPort(), token, kbID)
+	chunkRequest, err := http.NewRequest(
+		http.MethodPost,
+		fmt.Sprintf("http://127.0.0.1:%d/knowledge-base/docs/%s/chunk", server.GetListenedPort(), docID),
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("create chunk request failed: %v", err)
+	}
+	chunkRequest.Header.Set("Authorization", token)
+	chunkResponse, err := http.DefaultClient.Do(chunkRequest)
+	if err != nil {
+		t.Fatalf("request chunk failed: %v", err)
+	}
+	chunkResponse.Body.Close()
+	server.Shutdown()
+
+	recreated := newServer(cfg, guid.S())
+	recreated.SetAddr("127.0.0.1:0")
+	if err := recreated.Start(); err != nil {
+		t.Fatalf("restart server failed: %v", err)
+	}
+	defer recreated.Shutdown()
+	time.Sleep(100 * time.Millisecond)
+
+	recreatedToken := loginAndGetToken(t, recreated.GetListenedPort())
+	request, err := http.NewRequest(
+		http.MethodGet,
+		fmt.Sprintf("http://127.0.0.1:%d/knowledge-base/%s", recreated.GetListenedPort(), kbID),
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("create knowledge-base detail request failed: %v", err)
+	}
+	request.Header.Set("Authorization", recreatedToken)
+
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("request recreated knowledge-base failed: %v", err)
+	}
+	defer response.Body.Close()
+
+	var body struct {
+		Code string `json:"code"`
+		Data struct {
+			ID            string `json:"id"`
+			Name          string `json:"name"`
+			DocumentCount int    `json:"documentCount"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatalf("decode recreated knowledge-base failed: %v", err)
+	}
+	if body.Code != "0" {
+		t.Fatalf("expected code 0, got %s", body.Code)
+	}
+	if body.Data.ID != kbID || body.Data.Name != "SQL 产品文档库" {
+		t.Fatalf("unexpected recreated knowledge-base %#v", body.Data)
+	}
+	if body.Data.DocumentCount != 1 {
+		t.Fatalf("expected 1 document after restart, got %d", body.Data.DocumentCount)
 	}
 }
 
