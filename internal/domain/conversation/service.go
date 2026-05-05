@@ -59,12 +59,89 @@ type MessageView struct {
 	CreateTime       *time.Time `json:"createTime,omitempty"`
 }
 
+// Repository 定义会话和消息持久化仓储。
+type Repository interface {
+	LoadConversations() ([]Session, []Message, error)
+	SaveConversations(sessions []Session, messages []Message) error
+}
+
+type fileStoreRepository struct {
+	store *platformstate.FileStore
+}
+
+func (r *fileStoreRepository) LoadConversations() ([]Session, []Message, error) {
+	if r == nil || r.store == nil {
+		return nil, nil, nil
+	}
+	snapshot, err := r.store.Load()
+	if err != nil {
+		return nil, nil, err
+	}
+	sessions := make([]Session, 0, len(snapshot.ConversationSessions))
+	for _, record := range snapshot.ConversationSessions {
+		sessions = append(sessions, Session{
+			ConversationID: record.ConversationID,
+			UserID:         record.UserID,
+			Title:          record.Title,
+			LastTime:       record.LastTime,
+		})
+	}
+	messages := make([]Message, 0, len(snapshot.ConversationMessages))
+	for _, record := range snapshot.ConversationMessages {
+		messages = append(messages, Message{
+			ID:               record.ID,
+			ConversationID:   record.ConversationID,
+			UserID:           record.UserID,
+			Role:             record.Role,
+			Content:          record.Content,
+			ThinkingContent:  record.ThinkingContent,
+			ThinkingDuration: cloneIntPointer(record.ThinkingDuration),
+			Vote:             cloneIntPointer(record.Vote),
+			CreateTime:       record.CreateTime,
+		})
+	}
+	return sessions, messages, nil
+}
+
+func (r *fileStoreRepository) SaveConversations(sessions []Session, messages []Message) error {
+	if r == nil || r.store == nil {
+		return nil
+	}
+	sessionRecords := make([]platformstate.ConversationSessionRecord, 0, len(sessions))
+	for _, session := range sessions {
+		sessionRecords = append(sessionRecords, platformstate.ConversationSessionRecord{
+			ConversationID: session.ConversationID,
+			UserID:         session.UserID,
+			Title:          session.Title,
+			LastTime:       session.LastTime,
+		})
+	}
+	messageRecords := make([]platformstate.ConversationMessageRecord, 0, len(messages))
+	for _, message := range messages {
+		messageRecords = append(messageRecords, platformstate.ConversationMessageRecord{
+			ID:               message.ID,
+			ConversationID:   message.ConversationID,
+			UserID:           message.UserID,
+			Role:             message.Role,
+			Content:          message.Content,
+			ThinkingContent:  message.ThinkingContent,
+			ThinkingDuration: cloneIntPointer(message.ThinkingDuration),
+			Vote:             cloneIntPointer(message.Vote),
+			CreateTime:       message.CreateTime,
+		})
+	}
+	return r.store.Update(func(snapshot *platformstate.Snapshot) {
+		snapshot.ConversationSessions = sessionRecords
+		snapshot.ConversationMessages = messageRecords
+	})
+}
+
 // Service 提供当前阶段最小可用的会话与消息内存存储。
 type Service struct {
 	mu       sync.RWMutex
 	sessions map[string]map[string]Session
 	messages map[string]map[string][]Message
-	store    *platformstate.FileStore
+	repo     Repository
 }
 
 // StatsSnapshot 定义会话统计快照。
@@ -77,48 +154,42 @@ type StatsSnapshot struct {
 
 // NewService 创建会话服务。
 func NewService(store *platformstate.FileStore) *Service {
+	var repo Repository
+	if store != nil {
+		repo = &fileStoreRepository{store: store}
+	}
+	return NewServiceWithRepository(repo)
+}
+
+// NewServiceWithRepository 创建基于指定仓储的会话服务。
+func NewServiceWithRepository(repo Repository) *Service {
 	service := &Service{
 		sessions: make(map[string]map[string]Session),
 		messages: make(map[string]map[string][]Message),
-		store:    store,
+		repo:     repo,
 	}
-	if snapshot, err := service.loadSnapshot(); err == nil {
-		for _, session := range snapshot.ConversationSessions {
+	if sessions, messages, err := service.loadRecords(); err == nil {
+		for _, session := range sessions {
 			if service.sessions[session.UserID] == nil {
 				service.sessions[session.UserID] = make(map[string]Session)
 			}
-			service.sessions[session.UserID][session.ConversationID] = Session{
-				ConversationID: session.ConversationID,
-				UserID:         session.UserID,
-				Title:          session.Title,
-				LastTime:       session.LastTime,
-			}
+			service.sessions[session.UserID][session.ConversationID] = session
 		}
-		for _, message := range snapshot.ConversationMessages {
+		for _, message := range messages {
 			if service.messages[message.UserID] == nil {
 				service.messages[message.UserID] = make(map[string][]Message)
 			}
-			service.messages[message.UserID][message.ConversationID] = append(service.messages[message.UserID][message.ConversationID], Message{
-				ID:               message.ID,
-				ConversationID:   message.ConversationID,
-				UserID:           message.UserID,
-				Role:             message.Role,
-				Content:          message.Content,
-				ThinkingContent:  message.ThinkingContent,
-				ThinkingDuration: cloneIntPointer(message.ThinkingDuration),
-				Vote:             cloneIntPointer(message.Vote),
-				CreateTime:       message.CreateTime,
-			})
+			service.messages[message.UserID][message.ConversationID] = append(service.messages[message.UserID][message.ConversationID], message)
 		}
 	}
 	return service
 }
 
-func (s *Service) loadSnapshot() (platformstate.Snapshot, error) {
-	if s.store == nil {
-		return platformstate.Snapshot{}, nil
+func (s *Service) loadRecords() ([]Session, []Message, error) {
+	if s.repo == nil {
+		return nil, nil, nil
 	}
-	return s.store.Load()
+	return s.repo.LoadConversations()
 }
 
 // UpsertConversation 写入或更新会话记录。
@@ -319,55 +390,37 @@ func cloneIntPointer(value *int) *int {
 }
 
 func (s *Service) persistLocked() error {
-	if s.store == nil {
+	if s.repo == nil {
 		return nil
 	}
-	sessionRecords := make([]platformstate.ConversationSessionRecord, 0)
+	sessions := make([]Session, 0)
 	for _, sessionsByUser := range s.sessions {
 		for _, session := range sessionsByUser {
-			sessionRecords = append(sessionRecords, platformstate.ConversationSessionRecord{
-				ConversationID: session.ConversationID,
-				UserID:         session.UserID,
-				Title:          session.Title,
-				LastTime:       session.LastTime,
-			})
+			sessions = append(sessions, session)
 		}
 	}
-	messageRecords := make([]platformstate.ConversationMessageRecord, 0)
+	messages := make([]Message, 0)
 	for _, messagesByUser := range s.messages {
 		for _, messageList := range messagesByUser {
 			for _, message := range messageList {
-				messageRecords = append(messageRecords, platformstate.ConversationMessageRecord{
-					ID:               message.ID,
-					ConversationID:   message.ConversationID,
-					UserID:           message.UserID,
-					Role:             message.Role,
-					Content:          message.Content,
-					ThinkingContent:  message.ThinkingContent,
-					ThinkingDuration: cloneIntPointer(message.ThinkingDuration),
-					Vote:             cloneIntPointer(message.Vote),
-					CreateTime:       message.CreateTime,
-				})
+				messages = append(messages, message)
 			}
 		}
 	}
-	sort.Slice(sessionRecords, func(i, j int) bool {
-		if sessionRecords[i].UserID == sessionRecords[j].UserID {
-			return sessionRecords[i].ConversationID < sessionRecords[j].ConversationID
+	sort.Slice(sessions, func(i, j int) bool {
+		if sessions[i].UserID == sessions[j].UserID {
+			return sessions[i].ConversationID < sessions[j].ConversationID
 		}
-		return sessionRecords[i].UserID < sessionRecords[j].UserID
+		return sessions[i].UserID < sessions[j].UserID
 	})
-	sort.Slice(messageRecords, func(i, j int) bool {
-		if messageRecords[i].UserID == messageRecords[j].UserID {
-			if messageRecords[i].ConversationID == messageRecords[j].ConversationID {
-				return messageRecords[i].CreateTime.Before(messageRecords[j].CreateTime)
+	sort.Slice(messages, func(i, j int) bool {
+		if messages[i].UserID == messages[j].UserID {
+			if messages[i].ConversationID == messages[j].ConversationID {
+				return messages[i].CreateTime.Before(messages[j].CreateTime)
 			}
-			return messageRecords[i].ConversationID < messageRecords[j].ConversationID
+			return messages[i].ConversationID < messages[j].ConversationID
 		}
-		return messageRecords[i].UserID < messageRecords[j].UserID
+		return messages[i].UserID < messages[j].UserID
 	})
-	return s.store.Update(func(snapshot *platformstate.Snapshot) {
-		snapshot.ConversationSessions = sessionRecords
-		snapshot.ConversationMessages = messageRecords
-	})
+	return s.repo.SaveConversations(sessions, messages)
 }

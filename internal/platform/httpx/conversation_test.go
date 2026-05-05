@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"testing"
 	"time"
 
 	domainconversation "github.com/AmazingCYJ/AgentRAG/internal/domain/conversation"
 	appconfig "github.com/AmazingCYJ/AgentRAG/internal/platform/config"
 	"github.com/gogf/gf/v2/util/guid"
+	_ "modernc.org/sqlite"
 )
 
 func TestListSessionsReturnsConversationsForAuthenticatedUser(t *testing.T) {
@@ -362,6 +364,90 @@ func TestSubmitFeedbackUpdatesMessageVote(t *testing.T) {
 	}
 	if messages[0].Vote == nil || *messages[0].Vote != 1 {
 		t.Fatalf("expected message vote 1, got %#v", messages[0].Vote)
+	}
+}
+
+func TestConversationPersistsThroughConfiguredDatabase(t *testing.T) {
+	dsn := filepath.Join(t.TempDir(), "agentrag.db")
+	cfg := &appconfig.Config{
+		HTTP: appconfig.HTTPConfig{Port: 8080},
+		Auth: appconfig.AuthConfig{
+			JWTSecret: "test-secret",
+			TokenTTL:  time.Hour,
+			Bootstrap: appconfig.BootstrapUserConfig{
+				UserID:   "u_admin",
+				Username: "admin",
+				Password: "admin123",
+				Role:     "admin",
+			},
+		},
+		Database: appconfig.DatabaseConfig{
+			Driver: "sqlite",
+			DSN:    dsn,
+		},
+	}
+
+	server := newServer(cfg, guid.S())
+	server.SetAddr("127.0.0.1:0")
+	if err := server.Start(); err != nil {
+		t.Fatalf("start server failed: %v", err)
+	}
+	time.Sleep(100 * time.Millisecond)
+
+	token := loginAndGetToken(t, server.GetListenedPort())
+	chatRequest, err := http.NewRequest(
+		http.MethodGet,
+		fmt.Sprintf("http://127.0.0.1:%d/rag/v3/chat?question=%s", server.GetListenedPort(), "测试数据库会话"),
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("create chat request failed: %v", err)
+	}
+	chatRequest.Header.Set("Authorization", token)
+
+	chatResponse, err := http.DefaultClient.Do(chatRequest)
+	if err != nil {
+		t.Fatalf("chat request failed: %v", err)
+	}
+	chatResponse.Body.Close()
+	server.Shutdown()
+
+	recreated := newServer(cfg, guid.S())
+	recreated.SetAddr("127.0.0.1:0")
+	if err := recreated.Start(); err != nil {
+		t.Fatalf("restart server failed: %v", err)
+	}
+	defer recreated.Shutdown()
+	time.Sleep(100 * time.Millisecond)
+
+	recreatedToken := loginAndGetToken(t, recreated.GetListenedPort())
+	listRequest, err := http.NewRequest(http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d/conversations", recreated.GetListenedPort()), nil)
+	if err != nil {
+		t.Fatalf("create list request failed: %v", err)
+	}
+	listRequest.Header.Set("Authorization", recreatedToken)
+
+	listResponse, err := http.DefaultClient.Do(listRequest)
+	if err != nil {
+		t.Fatalf("list conversations failed: %v", err)
+	}
+	defer listResponse.Body.Close()
+
+	var body struct {
+		Code string `json:"code"`
+		Data []struct {
+			ConversationID string `json:"conversationId"`
+			Title          string `json:"title"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(listResponse.Body).Decode(&body); err != nil {
+		t.Fatalf("decode list response failed: %v", err)
+	}
+	if body.Code != "0" {
+		t.Fatalf("expected code 0, got %s", body.Code)
+	}
+	if len(body.Data) == 0 {
+		t.Fatal("expected persisted conversation")
 	}
 }
 

@@ -72,7 +72,7 @@ func newServerWithDeps(cfg *appconfig.Config, name string, deps serverDeps) *ght
 	}
 	conversationService := deps.conversationService
 	if conversationService == nil {
-		conversationService = domainconversation.NewService(stateStore)
+		conversationService = newConversationService(stateStore, database)
 	}
 	ragTraceService := deps.ragTraceService
 	if ragTraceService == nil {
@@ -294,6 +294,16 @@ func newQueryMappingService(stateStore *platformstate.FileStore, database *sql.D
 		}
 	}
 	return domainquerymapping.NewService(stateStore)
+}
+
+func newConversationService(stateStore *platformstate.FileStore, database *sql.DB) *domainconversation.Service {
+	if database != nil {
+		repository := platformdb.NewSQLConversationRepository(database)
+		if err := repository.Bootstrap(); err == nil {
+			return domainconversation.NewServiceWithRepository(repository)
+		}
+	}
+	return domainconversation.NewService(stateStore)
 }
 
 func buildMCPToolArguments(toolID, question string) map[string]any {
