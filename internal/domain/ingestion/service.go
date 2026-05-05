@@ -142,6 +142,182 @@ type TaskCreateRequest struct {
 	CreatedBy     string
 }
 
+// Repository 定义导入流水线、任务和任务节点的持久化仓储。
+type Repository interface {
+	LoadIngestionRecords() ([]Pipeline, []Task, []TaskNode, error)
+	SaveIngestionRecords(pipelines []Pipeline, tasks []Task, taskNodes []TaskNode) error
+}
+
+type fileStoreRepository struct {
+	store *platformstate.FileStore
+}
+
+func (r *fileStoreRepository) LoadIngestionRecords() ([]Pipeline, []Task, []TaskNode, error) {
+	if r == nil || r.store == nil {
+		return nil, nil, nil, nil
+	}
+	snapshot, err := r.store.Load()
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	pipelines := make([]Pipeline, 0, len(snapshot.IngestionPipelines))
+	for _, item := range snapshot.IngestionPipelines {
+		nodes := make([]PipelineNode, 0, len(item.Nodes))
+		for _, node := range item.Nodes {
+			nodes = append(nodes, PipelineNode{
+				ID:         node.ID,
+				NodeID:     node.NodeID,
+				NodeType:   node.NodeType,
+				Settings:   cloneMap(node.Settings),
+				Condition:  cloneMap(node.Condition),
+				NextNodeID: node.NextNodeID,
+			})
+		}
+		pipelines = append(pipelines, Pipeline{
+			ID:          item.ID,
+			Name:        item.Name,
+			Description: item.Description,
+			CreatedBy:   item.CreatedBy,
+			Nodes:       nodes,
+			CreateTime:  item.CreateTime,
+			UpdateTime:  item.UpdateTime,
+		})
+	}
+	tasks := make([]Task, 0, len(snapshot.IngestionTasks))
+	for _, item := range snapshot.IngestionTasks {
+		logs := make([]TaskLog, 0, len(item.Logs))
+		for _, log := range item.Logs {
+			logs = append(logs, TaskLog{
+				NodeID:     log.NodeID,
+				NodeType:   log.NodeType,
+				Message:    log.Message,
+				DurationMs: log.DurationMs,
+				Success:    log.Success,
+				Error:      log.Error,
+			})
+		}
+		tasks = append(tasks, Task{
+			ID:             item.ID,
+			PipelineID:     item.PipelineID,
+			SourceType:     item.SourceType,
+			SourceLocation: item.SourceLocation,
+			SourceFileName: item.SourceFileName,
+			Status:         item.Status,
+			ChunkCount:     item.ChunkCount,
+			ErrorMessage:   item.ErrorMessage,
+			Logs:           logs,
+			Metadata:       cloneMap(item.Metadata),
+			StartedAt:      item.StartedAt,
+			CompletedAt:    item.CompletedAt,
+			CreatedBy:      item.CreatedBy,
+			CreateTime:     item.CreateTime,
+			UpdateTime:     item.UpdateTime,
+		})
+	}
+	taskNodes := make([]TaskNode, 0, len(snapshot.IngestionTaskNodes))
+	for _, item := range snapshot.IngestionTaskNodes {
+		taskNodes = append(taskNodes, TaskNode{
+			ID:           item.ID,
+			TaskID:       item.TaskID,
+			PipelineID:   item.PipelineID,
+			NodeID:       item.NodeID,
+			NodeType:     item.NodeType,
+			NodeOrder:    item.NodeOrder,
+			Status:       item.Status,
+			DurationMs:   item.DurationMs,
+			Message:      item.Message,
+			ErrorMessage: item.ErrorMessage,
+			Output:       cloneMap(item.Output),
+			CreateTime:   item.CreateTime,
+			UpdateTime:   item.UpdateTime,
+		})
+	}
+	return pipelines, tasks, taskNodes, nil
+}
+
+func (r *fileStoreRepository) SaveIngestionRecords(pipelines []Pipeline, tasks []Task, taskNodes []TaskNode) error {
+	if r == nil || r.store == nil {
+		return nil
+	}
+	pipelineRecords := make([]platformstate.IngestionPipelineRecord, 0, len(pipelines))
+	for _, pipeline := range pipelines {
+		nodeRecords := make([]platformstate.IngestionPipelineNodeRecord, 0, len(pipeline.Nodes))
+		for _, node := range pipeline.Nodes {
+			nodeRecords = append(nodeRecords, platformstate.IngestionPipelineNodeRecord{
+				ID:         node.ID,
+				NodeID:     node.NodeID,
+				NodeType:   node.NodeType,
+				Settings:   cloneMap(node.Settings),
+				Condition:  cloneMap(node.Condition),
+				NextNodeID: node.NextNodeID,
+			})
+		}
+		pipelineRecords = append(pipelineRecords, platformstate.IngestionPipelineRecord{
+			ID:          pipeline.ID,
+			Name:        pipeline.Name,
+			Description: pipeline.Description,
+			CreatedBy:   pipeline.CreatedBy,
+			Nodes:       nodeRecords,
+			CreateTime:  pipeline.CreateTime,
+			UpdateTime:  pipeline.UpdateTime,
+		})
+	}
+	taskRecords := make([]platformstate.IngestionTaskRecord, 0, len(tasks))
+	for _, task := range tasks {
+		logRecords := make([]platformstate.IngestionTaskLogRecord, 0, len(task.Logs))
+		for _, log := range task.Logs {
+			logRecords = append(logRecords, platformstate.IngestionTaskLogRecord{
+				NodeID:     log.NodeID,
+				NodeType:   log.NodeType,
+				Message:    log.Message,
+				DurationMs: log.DurationMs,
+				Success:    log.Success,
+				Error:      log.Error,
+			})
+		}
+		taskRecords = append(taskRecords, platformstate.IngestionTaskRecord{
+			ID:             task.ID,
+			PipelineID:     task.PipelineID,
+			SourceType:     task.SourceType,
+			SourceLocation: task.SourceLocation,
+			SourceFileName: task.SourceFileName,
+			Status:         task.Status,
+			ChunkCount:     task.ChunkCount,
+			ErrorMessage:   task.ErrorMessage,
+			Logs:           logRecords,
+			Metadata:       cloneMap(task.Metadata),
+			StartedAt:      task.StartedAt,
+			CompletedAt:    task.CompletedAt,
+			CreatedBy:      task.CreatedBy,
+			CreateTime:     task.CreateTime,
+			UpdateTime:     task.UpdateTime,
+		})
+	}
+	taskNodeRecords := make([]platformstate.IngestionTaskNodeRecord, 0, len(taskNodes))
+	for _, node := range taskNodes {
+		taskNodeRecords = append(taskNodeRecords, platformstate.IngestionTaskNodeRecord{
+			ID:           node.ID,
+			TaskID:       node.TaskID,
+			PipelineID:   node.PipelineID,
+			NodeID:       node.NodeID,
+			NodeType:     node.NodeType,
+			NodeOrder:    node.NodeOrder,
+			Status:       node.Status,
+			DurationMs:   node.DurationMs,
+			Message:      node.Message,
+			ErrorMessage: node.ErrorMessage,
+			Output:       cloneMap(node.Output),
+			CreateTime:   node.CreateTime,
+			UpdateTime:   node.UpdateTime,
+		})
+	}
+	return r.store.Update(func(snapshot *platformstate.Snapshot) {
+		snapshot.IngestionPipelines = pipelineRecords
+		snapshot.IngestionTasks = taskRecords
+		snapshot.IngestionTaskNodes = taskNodeRecords
+	})
+}
+
 // Service 提供数据通道流水线和任务的内存能力。
 type Service struct {
 	mu sync.RWMutex
@@ -153,11 +329,20 @@ type Service struct {
 	nextPipelineNodeID int64
 	now                func() time.Time
 	newID              func() string
-	store              *platformstate.FileStore
+	repo               Repository
 }
 
 // NewService 创建 Ingestion 服务。
 func NewService(store *platformstate.FileStore) *Service {
+	var repo Repository
+	if store != nil {
+		repo = &fileStoreRepository{store: store}
+	}
+	return NewServiceWithRepository(repo)
+}
+
+// NewServiceWithRepository 创建基于指定仓储的 Ingestion 服务。
+func NewServiceWithRepository(repo Repository) *Service {
 	service := &Service{
 		pipelines:          make(map[string]Pipeline),
 		tasks:              make(map[string]Task),
@@ -165,90 +350,36 @@ func NewService(store *platformstate.FileStore) *Service {
 		nextPipelineNodeID: 1,
 		now:                time.Now,
 		newID:              func() string { return strings.ReplaceAll(guid.S(), "-", "") },
-		store:              store,
+		repo:               repo,
 	}
-	if snapshot, err := service.loadSnapshot(); err == nil {
-		for _, item := range snapshot.IngestionPipelines {
-			nodes := make([]PipelineNode, 0, len(item.Nodes))
+	if pipelines, tasks, taskNodes, err := service.loadRecords(); err == nil {
+		for _, item := range pipelines {
 			for _, node := range item.Nodes {
-				nodes = append(nodes, PipelineNode{
-					ID:         node.ID,
-					NodeID:     node.NodeID,
-					NodeType:   node.NodeType,
-					Settings:   cloneMap(node.Settings),
-					Condition:  cloneMap(node.Condition),
-					NextNodeID: node.NextNodeID,
-				})
-				if node.ID >= service.nextPipelineNodeID {
-					service.nextPipelineNodeID = node.ID + 1
-				}
+				service.bumpNextPipelineNodeID(node.ID)
 			}
-			service.pipelines[item.ID] = Pipeline{
-				ID:          item.ID,
-				Name:        item.Name,
-				Description: item.Description,
-				CreatedBy:   item.CreatedBy,
-				Nodes:       nodes,
-				CreateTime:  item.CreateTime,
-				UpdateTime:  item.UpdateTime,
-			}
+			service.pipelines[item.ID] = item
 		}
-		for _, item := range snapshot.IngestionTasks {
-			logs := make([]TaskLog, 0, len(item.Logs))
-			for _, log := range item.Logs {
-				logs = append(logs, TaskLog{
-					NodeID:     log.NodeID,
-					NodeType:   log.NodeType,
-					Message:    log.Message,
-					DurationMs: log.DurationMs,
-					Success:    log.Success,
-					Error:      log.Error,
-				})
-			}
-			service.tasks[item.ID] = Task{
-				ID:             item.ID,
-				PipelineID:     item.PipelineID,
-				SourceType:     item.SourceType,
-				SourceLocation: item.SourceLocation,
-				SourceFileName: item.SourceFileName,
-				Status:         item.Status,
-				ChunkCount:     item.ChunkCount,
-				ErrorMessage:   item.ErrorMessage,
-				Logs:           logs,
-				Metadata:       cloneMap(item.Metadata),
-				StartedAt:      item.StartedAt,
-				CompletedAt:    item.CompletedAt,
-				CreatedBy:      item.CreatedBy,
-				CreateTime:     item.CreateTime,
-				UpdateTime:     item.UpdateTime,
-			}
+		for _, item := range tasks {
+			service.tasks[item.ID] = item
 		}
-		for _, item := range snapshot.IngestionTaskNodes {
-			service.taskNodes[item.TaskID] = append(service.taskNodes[item.TaskID], TaskNode{
-				ID:           item.ID,
-				TaskID:       item.TaskID,
-				PipelineID:   item.PipelineID,
-				NodeID:       item.NodeID,
-				NodeType:     item.NodeType,
-				NodeOrder:    item.NodeOrder,
-				Status:       item.Status,
-				DurationMs:   item.DurationMs,
-				Message:      item.Message,
-				ErrorMessage: item.ErrorMessage,
-				Output:       cloneMap(item.Output),
-				CreateTime:   item.CreateTime,
-				UpdateTime:   item.UpdateTime,
-			})
+		for _, item := range taskNodes {
+			service.taskNodes[item.TaskID] = append(service.taskNodes[item.TaskID], item)
 		}
 	}
 	return service
 }
 
-func (s *Service) loadSnapshot() (platformstate.Snapshot, error) {
-	if s.store == nil {
-		return platformstate.Snapshot{}, nil
+func (s *Service) loadRecords() ([]Pipeline, []Task, []TaskNode, error) {
+	if s.repo == nil {
+		return nil, nil, nil, nil
 	}
-	return s.store.Load()
+	return s.repo.LoadIngestionRecords()
+}
+
+func (s *Service) bumpNextPipelineNodeID(id int64) {
+	if id >= s.nextPipelineNodeID {
+		s.nextPipelineNodeID = id + 1
+	}
 }
 
 // CreatePipeline 创建流水线。
@@ -546,7 +677,11 @@ func clonePipeline(p Pipeline) Pipeline {
 	result := p
 	if len(p.Nodes) > 0 {
 		result.Nodes = make([]PipelineNode, len(p.Nodes))
-		copy(result.Nodes, p.Nodes)
+		for index, node := range p.Nodes {
+			result.Nodes[index] = node
+			result.Nodes[index].Settings = cloneMap(node.Settings)
+			result.Nodes[index].Condition = cloneMap(node.Condition)
+		}
 	}
 	return result
 }
@@ -620,94 +755,32 @@ func maxInt(a, b int) int {
 }
 
 func (s *Service) persistLocked() error {
-	if s.store == nil {
+	if s.repo == nil {
 		return nil
 	}
-	pipelineRecords := make([]platformstate.IngestionPipelineRecord, 0, len(s.pipelines))
+	pipelines := make([]Pipeline, 0, len(s.pipelines))
 	for _, pipeline := range s.pipelines {
-		nodeRecords := make([]platformstate.IngestionPipelineNodeRecord, 0, len(pipeline.Nodes))
-		for _, node := range pipeline.Nodes {
-			nodeRecords = append(nodeRecords, platformstate.IngestionPipelineNodeRecord{
-				ID:         node.ID,
-				NodeID:     node.NodeID,
-				NodeType:   node.NodeType,
-				Settings:   cloneMap(node.Settings),
-				Condition:  cloneMap(node.Condition),
-				NextNodeID: node.NextNodeID,
-			})
-		}
-		pipelineRecords = append(pipelineRecords, platformstate.IngestionPipelineRecord{
-			ID:          pipeline.ID,
-			Name:        pipeline.Name,
-			Description: pipeline.Description,
-			CreatedBy:   pipeline.CreatedBy,
-			Nodes:       nodeRecords,
-			CreateTime:  pipeline.CreateTime,
-			UpdateTime:  pipeline.UpdateTime,
-		})
+		pipelines = append(pipelines, clonePipeline(pipeline))
 	}
-	taskRecords := make([]platformstate.IngestionTaskRecord, 0, len(s.tasks))
+	tasks := make([]Task, 0, len(s.tasks))
 	for _, task := range s.tasks {
-		logRecords := make([]platformstate.IngestionTaskLogRecord, 0, len(task.Logs))
-		for _, log := range task.Logs {
-			logRecords = append(logRecords, platformstate.IngestionTaskLogRecord{
-				NodeID:     log.NodeID,
-				NodeType:   log.NodeType,
-				Message:    log.Message,
-				DurationMs: log.DurationMs,
-				Success:    log.Success,
-				Error:      log.Error,
-			})
-		}
-		taskRecords = append(taskRecords, platformstate.IngestionTaskRecord{
-			ID:             task.ID,
-			PipelineID:     task.PipelineID,
-			SourceType:     task.SourceType,
-			SourceLocation: task.SourceLocation,
-			SourceFileName: task.SourceFileName,
-			Status:         task.Status,
-			ChunkCount:     task.ChunkCount,
-			ErrorMessage:   task.ErrorMessage,
-			Logs:           logRecords,
-			Metadata:       cloneMap(task.Metadata),
-			StartedAt:      task.StartedAt,
-			CompletedAt:    task.CompletedAt,
-			CreatedBy:      task.CreatedBy,
-			CreateTime:     task.CreateTime,
-			UpdateTime:     task.UpdateTime,
-		})
+		tasks = append(tasks, cloneTask(task))
 	}
-	taskNodeRecords := make([]platformstate.IngestionTaskNodeRecord, 0)
+	taskNodes := make([]TaskNode, 0)
 	for _, nodes := range s.taskNodes {
 		for _, node := range nodes {
-			taskNodeRecords = append(taskNodeRecords, platformstate.IngestionTaskNodeRecord{
-				ID:           node.ID,
-				TaskID:       node.TaskID,
-				PipelineID:   node.PipelineID,
-				NodeID:       node.NodeID,
-				NodeType:     node.NodeType,
-				NodeOrder:    node.NodeOrder,
-				Status:       node.Status,
-				DurationMs:   node.DurationMs,
-				Message:      node.Message,
-				ErrorMessage: node.ErrorMessage,
-				Output:       cloneMap(node.Output),
-				CreateTime:   node.CreateTime,
-				UpdateTime:   node.UpdateTime,
-			})
+			next := node
+			next.Output = cloneMap(node.Output)
+			taskNodes = append(taskNodes, next)
 		}
 	}
-	sort.Slice(pipelineRecords, func(i, j int) bool { return pipelineRecords[i].CreateTime.Before(pipelineRecords[j].CreateTime) })
-	sort.Slice(taskRecords, func(i, j int) bool { return taskRecords[i].CreateTime.After(taskRecords[j].CreateTime) })
-	sort.Slice(taskNodeRecords, func(i, j int) bool {
-		if taskNodeRecords[i].TaskID == taskNodeRecords[j].TaskID {
-			return taskNodeRecords[i].NodeOrder < taskNodeRecords[j].NodeOrder
+	sort.Slice(pipelines, func(i, j int) bool { return pipelines[i].CreateTime.Before(pipelines[j].CreateTime) })
+	sort.Slice(tasks, func(i, j int) bool { return tasks[i].CreateTime.After(tasks[j].CreateTime) })
+	sort.Slice(taskNodes, func(i, j int) bool {
+		if taskNodes[i].TaskID == taskNodes[j].TaskID {
+			return taskNodes[i].NodeOrder < taskNodes[j].NodeOrder
 		}
-		return taskNodeRecords[i].TaskID < taskNodeRecords[j].TaskID
+		return taskNodes[i].TaskID < taskNodes[j].TaskID
 	})
-	return s.store.Update(func(snapshot *platformstate.Snapshot) {
-		snapshot.IngestionPipelines = pipelineRecords
-		snapshot.IngestionTasks = taskRecords
-		snapshot.IngestionTaskNodes = taskNodeRecords
-	})
+	return s.repo.SaveIngestionRecords(pipelines, tasks, taskNodes)
 }

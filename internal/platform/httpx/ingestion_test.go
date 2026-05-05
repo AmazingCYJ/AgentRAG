@@ -6,11 +6,14 @@ import (
 	"fmt"
 	"mime/multipart"
 	"net/http"
+	"path/filepath"
 	"testing"
 	"time"
 
 	appconfig "github.com/AmazingCYJ/AgentRAG/internal/platform/config"
+	"github.com/gogf/gf/v2/net/ghttp"
 	"github.com/gogf/gf/v2/util/guid"
+	_ "modernc.org/sqlite"
 )
 
 func TestIngestionPipelineAndTaskLifecycle(t *testing.T) {
@@ -466,4 +469,243 @@ func uploadIngestionTaskForTest(t *testing.T, port int, token, pipelineID string
 		t.Fatalf("expected upload task code 0, got %s", responseBody.Code)
 	}
 	return responseBody.Data.TaskID
+}
+
+func TestIngestionRecordsPersistAcrossServerRestartWithDatabase(t *testing.T) {
+	cfg := &appconfig.Config{
+		HTTP: appconfig.HTTPConfig{Port: 8080},
+		Auth: appconfig.AuthConfig{
+			JWTSecret: "test-secret",
+			TokenTTL:  time.Hour,
+			Bootstrap: appconfig.BootstrapUserConfig{
+				UserID:   "u_admin",
+				Username: "admin",
+				Password: "admin123",
+				Role:     "admin",
+			},
+		},
+		Database: appconfig.DatabaseConfig{
+			Driver: "sqlite",
+			DSN:    filepath.Join(t.TempDir(), "agentrag.db"),
+		},
+	}
+
+	firstServer := startIngestionTestServer(t, cfg)
+	firstToken := loginAndGetToken(t, firstServer.GetListenedPort())
+	pipelineID := createIngestionPipelineForTest(t, firstServer.GetListenedPort(), firstToken, "SQL 重启流水线")
+	taskID := createIngestionTaskForTest(t, firstServer.GetListenedPort(), firstToken, pipelineID)
+	firstServer.Shutdown()
+
+	secondServer := startIngestionTestServer(t, cfg)
+	defer secondServer.Shutdown()
+	secondToken := loginAndGetToken(t, secondServer.GetListenedPort())
+
+	pipeline := getIngestionPipelineForTest(t, secondServer.GetListenedPort(), secondToken, pipelineID)
+	if pipeline.Name != "SQL 重启流水线" || len(pipeline.Nodes) != 2 {
+		t.Fatalf("unexpected persisted pipeline %#v", pipeline)
+	}
+	task := getIngestionTaskForTest(t, secondServer.GetListenedPort(), secondToken, taskID)
+	if task.PipelineID != pipelineID || task.Status != "success" {
+		t.Fatalf("unexpected persisted task %#v", task)
+	}
+	nodes := getIngestionTaskNodesForTest(t, secondServer.GetListenedPort(), secondToken, taskID)
+	if len(nodes) != 2 || nodes[0].NodeID != "fetcher" {
+		t.Fatalf("unexpected persisted task nodes %#v", nodes)
+	}
+}
+
+func startIngestionTestServer(t *testing.T, cfg *appconfig.Config) *ghttp.Server {
+	t.Helper()
+
+	server := newServer(cfg, guid.S())
+	server.SetAddr("127.0.0.1:0")
+	if err := server.Start(); err != nil {
+		t.Fatalf("start server failed: %v", err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	return server
+}
+
+type ingestionPipelineTestResponse struct {
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	Nodes []struct {
+		NodeID string `json:"nodeId"`
+	} `json:"nodes"`
+}
+
+type ingestionTaskTestResponse struct {
+	ID         string `json:"id"`
+	PipelineID string `json:"pipelineId"`
+	Status     string `json:"status"`
+}
+
+type ingestionTaskNodeTestResponse struct {
+	ID     string `json:"id"`
+	NodeID string `json:"nodeId"`
+}
+
+func createIngestionPipelineForTest(t *testing.T, port int, token, name string) string {
+	t.Helper()
+
+	payload, _ := json.Marshal(map[string]any{
+		"name":        name,
+		"description": "数据库持久化测试",
+		"nodes": []map[string]any{
+			{
+				"nodeId":     "fetcher",
+				"nodeType":   "fetcher",
+				"settings":   map[string]any{"timeoutMs": 15000},
+				"nextNodeId": "parser",
+			},
+			{
+				"nodeId":   "parser",
+				"nodeType": "parser",
+				"settings": map[string]any{"format": "markdown"},
+			},
+		},
+	})
+	request, err := http.NewRequest(
+		http.MethodPost,
+		fmt.Sprintf("http://127.0.0.1:%d/ingestion/pipelines", port),
+		bytes.NewReader(payload),
+	)
+	if err != nil {
+		t.Fatalf("create pipeline request failed: %v", err)
+	}
+	request.Header.Set("Authorization", token)
+	request.Header.Set("Content-Type", "application/json")
+
+	var body struct {
+		Code string                        `json:"code"`
+		Data ingestionPipelineTestResponse `json:"data"`
+	}
+	doJSONRequestForTest(t, request, &body)
+	if body.Code != "0" || body.Data.ID == "" {
+		t.Fatalf("unexpected create pipeline response %#v", body)
+	}
+	return body.Data.ID
+}
+
+func createIngestionTaskForTest(t *testing.T, port int, token, pipelineID string) string {
+	t.Helper()
+
+	payload, _ := json.Marshal(map[string]any{
+		"pipelineId": pipelineID,
+		"source": map[string]any{
+			"type":     "url",
+			"location": "https://example.com/restart",
+			"fileName": "restart.md",
+		},
+		"metadata": map[string]any{
+			"scene": "restart",
+		},
+	})
+	request, err := http.NewRequest(
+		http.MethodPost,
+		fmt.Sprintf("http://127.0.0.1:%d/ingestion/tasks", port),
+		bytes.NewReader(payload),
+	)
+	if err != nil {
+		t.Fatalf("create task request failed: %v", err)
+	}
+	request.Header.Set("Authorization", token)
+	request.Header.Set("Content-Type", "application/json")
+
+	var body struct {
+		Code string `json:"code"`
+		Data struct {
+			TaskID string `json:"taskId"`
+		} `json:"data"`
+	}
+	doJSONRequestForTest(t, request, &body)
+	if body.Code != "0" || body.Data.TaskID == "" {
+		t.Fatalf("unexpected create task response %#v", body)
+	}
+	return body.Data.TaskID
+}
+
+func getIngestionPipelineForTest(t *testing.T, port int, token, pipelineID string) ingestionPipelineTestResponse {
+	t.Helper()
+
+	request, err := http.NewRequest(
+		http.MethodGet,
+		fmt.Sprintf("http://127.0.0.1:%d/ingestion/pipelines/%s", port, pipelineID),
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("create get pipeline request failed: %v", err)
+	}
+	request.Header.Set("Authorization", token)
+
+	var body struct {
+		Code string                        `json:"code"`
+		Data ingestionPipelineTestResponse `json:"data"`
+	}
+	doJSONRequestForTest(t, request, &body)
+	if body.Code != "0" {
+		t.Fatalf("unexpected get pipeline response %#v", body)
+	}
+	return body.Data
+}
+
+func getIngestionTaskForTest(t *testing.T, port int, token, taskID string) ingestionTaskTestResponse {
+	t.Helper()
+
+	request, err := http.NewRequest(
+		http.MethodGet,
+		fmt.Sprintf("http://127.0.0.1:%d/ingestion/tasks/%s", port, taskID),
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("create get task request failed: %v", err)
+	}
+	request.Header.Set("Authorization", token)
+
+	var body struct {
+		Code string                    `json:"code"`
+		Data ingestionTaskTestResponse `json:"data"`
+	}
+	doJSONRequestForTest(t, request, &body)
+	if body.Code != "0" {
+		t.Fatalf("unexpected get task response %#v", body)
+	}
+	return body.Data
+}
+
+func getIngestionTaskNodesForTest(t *testing.T, port int, token, taskID string) []ingestionTaskNodeTestResponse {
+	t.Helper()
+
+	request, err := http.NewRequest(
+		http.MethodGet,
+		fmt.Sprintf("http://127.0.0.1:%d/ingestion/tasks/%s/nodes", port, taskID),
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("create get task nodes request failed: %v", err)
+	}
+	request.Header.Set("Authorization", token)
+
+	var body struct {
+		Code string                          `json:"code"`
+		Data []ingestionTaskNodeTestResponse `json:"data"`
+	}
+	doJSONRequestForTest(t, request, &body)
+	if body.Code != "0" {
+		t.Fatalf("unexpected get task nodes response %#v", body)
+	}
+	return body.Data
+}
+
+func doJSONRequestForTest(t *testing.T, request *http.Request, target any) {
+	t.Helper()
+
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer response.Body.Close()
+	if err := json.NewDecoder(response.Body).Decode(target); err != nil {
+		t.Fatalf("decode response failed: %v", err)
+	}
 }

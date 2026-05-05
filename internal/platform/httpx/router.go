@@ -136,7 +136,7 @@ func newServerWithDeps(cfg *appconfig.Config, name string, deps serverDeps) *ght
 	}
 	ingestionService := deps.ingestionService
 	if ingestionService == nil {
-		ingestionService = domainingestion.NewService(stateStore)
+		ingestionService = newIngestionService(stateStore, database)
 	}
 	queryMappingService := deps.queryMappingService
 	if queryMappingService == nil {
@@ -350,6 +350,16 @@ func newKnowledgeService(stateStore *platformstate.FileStore, database *sql.DB) 
 		}
 	}
 	return domainknowledge.NewService(stateStore)
+}
+
+func newIngestionService(stateStore *platformstate.FileStore, database *sql.DB) *domainingestion.Service {
+	if database != nil {
+		repository := platformdb.NewSQLIngestionRepository(database)
+		if err := repository.Bootstrap(); err == nil {
+			return domainingestion.NewServiceWithRepository(repository)
+		}
+	}
+	return domainingestion.NewService(stateStore)
 }
 
 func buildMCPToolArguments(toolID, question string) map[string]any {
