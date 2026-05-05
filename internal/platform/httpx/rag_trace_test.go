@@ -3,11 +3,18 @@ package httpx
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"net/url"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	domainconversation "github.com/AmazingCYJ/AgentRAG/internal/domain/conversation"
+	appconfig "github.com/AmazingCYJ/AgentRAG/internal/platform/config"
+	"github.com/gogf/gf/v2/util/guid"
+	_ "modernc.org/sqlite"
 )
 
 func TestRagTraceEndpointsExposeChatRunData(t *testing.T) {
@@ -177,5 +184,124 @@ func TestRagTraceEndpointsExposeChatRunData(t *testing.T) {
 	}
 	if len(nodesBody.Data) != len(detailBody.Data.Nodes) {
 		t.Fatalf("expected nodes length %d, got %d", len(detailBody.Data.Nodes), len(nodesBody.Data))
+	}
+}
+
+func TestRagTracePersistsThroughConfiguredDatabase(t *testing.T) {
+	dsn := filepath.Join(t.TempDir(), "agentrag.db")
+	cfg := &appconfig.Config{
+		HTTP: appconfig.HTTPConfig{Port: 8080},
+		Auth: appconfig.AuthConfig{
+			JWTSecret: "test-secret",
+			TokenTTL:  time.Hour,
+			Bootstrap: appconfig.BootstrapUserConfig{
+				UserID:   "u_admin",
+				Username: "admin",
+				Password: "admin123",
+				Role:     "admin",
+			},
+		},
+		Database: appconfig.DatabaseConfig{
+			Driver: "sqlite",
+			DSN:    dsn,
+		},
+	}
+
+	server := newServer(cfg, guid.S())
+	server.SetAddr("127.0.0.1:0")
+	if err := server.Start(); err != nil {
+		t.Fatalf("start server failed: %v", err)
+	}
+	time.Sleep(100 * time.Millisecond)
+
+	token := loginAndGetToken(t, server.GetListenedPort())
+	client := &http.Client{Timeout: 5 * time.Second}
+	chatRequest, err := http.NewRequest(
+		http.MethodGet,
+		fmt.Sprintf("http://127.0.0.1:%d/rag/v3/chat?question=%s", server.GetListenedPort(), url.QueryEscape("测试 Trace 数据库")),
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("create chat request failed: %v", err)
+	}
+	chatRequest.Header.Set("Authorization", token)
+
+	chatResponse, err := client.Do(chatRequest)
+	if err != nil {
+		t.Fatalf("chat request failed: %v", err)
+	}
+	if chatResponse.StatusCode != http.StatusOK {
+		content, _ := io.ReadAll(chatResponse.Body)
+		chatResponse.Body.Close()
+		t.Fatalf("expected chat status 200, got %d body %s", chatResponse.StatusCode, string(content))
+	}
+	if !strings.Contains(chatResponse.Header.Get("Content-Type"), "text/event-stream") {
+		content, _ := io.ReadAll(chatResponse.Body)
+		chatResponse.Body.Close()
+		t.Fatalf("expected sse response, got content-type %s body %s", chatResponse.Header.Get("Content-Type"), string(content))
+	}
+	events := readSSEEventsUntilDone(t, chatResponse.Body)
+	chatResponse.Body.Close()
+	if len(events) == 0 {
+		t.Fatal("expected chat events")
+	}
+
+	var meta struct {
+		TaskID string `json:"taskId"`
+	}
+	if err := json.Unmarshal(events[0].Data, &meta); err != nil {
+		t.Fatalf("decode chat meta failed: %v", err)
+	}
+	if meta.TaskID == "" {
+		t.Fatal("expected task id")
+	}
+	server.Shutdown()
+
+	recreated := newServer(cfg, guid.S())
+	recreated.SetAddr("127.0.0.1:0")
+	if err := recreated.Start(); err != nil {
+		t.Fatalf("restart server failed: %v", err)
+	}
+	defer recreated.Shutdown()
+	time.Sleep(100 * time.Millisecond)
+
+	recreatedToken := loginAndGetToken(t, recreated.GetListenedPort())
+	runsRequest, err := http.NewRequest(
+		http.MethodGet,
+		fmt.Sprintf("http://127.0.0.1:%d/rag/traces/runs?taskId=%s", recreated.GetListenedPort(), meta.TaskID),
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("create trace runs request failed: %v", err)
+	}
+	runsRequest.Header.Set("Authorization", recreatedToken)
+
+	runsResponse, err := client.Do(runsRequest)
+	if err != nil {
+		t.Fatalf("request trace runs failed: %v", err)
+	}
+	defer runsResponse.Body.Close()
+
+	var runsBody struct {
+		Code string `json:"code"`
+		Data struct {
+			Records []struct {
+				TraceID string `json:"traceId"`
+				TaskID  string `json:"taskId"`
+			} `json:"records"`
+			Total int `json:"total"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(runsResponse.Body).Decode(&runsBody); err != nil {
+		t.Fatalf("decode trace runs failed: %v", err)
+	}
+	if runsBody.Code != "0" {
+		t.Fatalf("expected trace runs code 0, got %s", runsBody.Code)
+	}
+	if runsBody.Data.Total == 0 || len(runsBody.Data.Records) == 0 {
+		t.Fatal("expected persisted trace run")
+	}
+	if runsBody.Data.Records[0].TaskID != meta.TaskID {
+		t.Fatalf("expected task id %s, got %s", meta.TaskID, runsBody.Data.Records[0].TaskID)
 	}
 }

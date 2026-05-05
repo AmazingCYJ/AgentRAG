@@ -76,7 +76,7 @@ func newServerWithDeps(cfg *appconfig.Config, name string, deps serverDeps) *ght
 	}
 	ragTraceService := deps.ragTraceService
 	if ragTraceService == nil {
-		ragTraceService = domainragtrace.NewService(stateStore)
+		ragTraceService = newRagTraceService(stateStore, database)
 	}
 	dashboardService := deps.dashboardService
 	if dashboardService == nil {
@@ -304,6 +304,16 @@ func newConversationService(stateStore *platformstate.FileStore, database *sql.D
 		}
 	}
 	return domainconversation.NewService(stateStore)
+}
+
+func newRagTraceService(stateStore *platformstate.FileStore, database *sql.DB) *domainragtrace.Service {
+	if database != nil {
+		repository := platformdb.NewSQLRagTraceRepository(database)
+		if err := repository.Bootstrap(); err == nil {
+			return domainragtrace.NewServiceWithRepository(repository)
+		}
+	}
+	return domainragtrace.NewService(stateStore)
 }
 
 func buildMCPToolArguments(toolID, question string) map[string]any {

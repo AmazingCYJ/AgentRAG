@@ -101,6 +101,107 @@ type ChatTraceStep struct {
 	Detail     string
 }
 
+// Repository 定义 Trace 运行记录和节点记录的持久化仓储。
+type Repository interface {
+	LoadTraceRecords() ([]Run, []Node, error)
+	SaveTraceRecords(runs []Run, nodes []Node) error
+}
+
+type fileStoreRepository struct {
+	store *platformstate.FileStore
+}
+
+func (r *fileStoreRepository) LoadTraceRecords() ([]Run, []Node, error) {
+	if r == nil || r.store == nil {
+		return nil, nil, nil
+	}
+	snapshot, err := r.store.Load()
+	if err != nil {
+		return nil, nil, err
+	}
+	runs := make([]Run, 0, len(snapshot.RagTraceRuns))
+	for _, run := range snapshot.RagTraceRuns {
+		runs = append(runs, Run{
+			TraceID:        run.TraceID,
+			TraceName:      run.TraceName,
+			EntryMethod:    run.EntryMethod,
+			ConversationID: run.ConversationID,
+			TaskID:         run.TaskID,
+			UserName:       run.UserName,
+			UserID:         run.UserID,
+			Status:         run.Status,
+			ErrorMessage:   run.ErrorMessage,
+			DurationMs:     run.DurationMs,
+			StartTime:      run.StartTime,
+			EndTime:        run.EndTime,
+		})
+	}
+	nodes := make([]Node, 0, len(snapshot.RagTraceNodes))
+	for _, node := range snapshot.RagTraceNodes {
+		nodes = append(nodes, Node{
+			TraceID:      node.TraceID,
+			NodeID:       node.NodeID,
+			ParentNodeID: node.ParentNodeID,
+			Depth:        node.Depth,
+			NodeType:     node.NodeType,
+			NodeName:     node.NodeName,
+			ClassName:    node.ClassName,
+			MethodName:   node.MethodName,
+			Status:       node.Status,
+			ErrorMessage: node.ErrorMessage,
+			DurationMs:   node.DurationMs,
+			StartTime:    node.StartTime,
+			EndTime:      node.EndTime,
+		})
+	}
+	return runs, nodes, nil
+}
+
+func (r *fileStoreRepository) SaveTraceRecords(runs []Run, nodes []Node) error {
+	if r == nil || r.store == nil {
+		return nil
+	}
+	runRecords := make([]platformstate.RagTraceRunRecord, 0, len(runs))
+	for _, run := range runs {
+		runRecords = append(runRecords, platformstate.RagTraceRunRecord{
+			TraceID:        run.TraceID,
+			TraceName:      run.TraceName,
+			EntryMethod:    run.EntryMethod,
+			ConversationID: run.ConversationID,
+			TaskID:         run.TaskID,
+			UserName:       run.UserName,
+			UserID:         run.UserID,
+			Status:         run.Status,
+			ErrorMessage:   run.ErrorMessage,
+			DurationMs:     run.DurationMs,
+			StartTime:      run.StartTime,
+			EndTime:        run.EndTime,
+		})
+	}
+	nodeRecords := make([]platformstate.RagTraceNodeRecord, 0, len(nodes))
+	for _, node := range nodes {
+		nodeRecords = append(nodeRecords, platformstate.RagTraceNodeRecord{
+			TraceID:      node.TraceID,
+			NodeID:       node.NodeID,
+			ParentNodeID: node.ParentNodeID,
+			Depth:        node.Depth,
+			NodeType:     node.NodeType,
+			NodeName:     node.NodeName,
+			ClassName:    node.ClassName,
+			MethodName:   node.MethodName,
+			Status:       node.Status,
+			ErrorMessage: node.ErrorMessage,
+			DurationMs:   node.DurationMs,
+			StartTime:    node.StartTime,
+			EndTime:      node.EndTime,
+		})
+	}
+	return r.store.Update(func(snapshot *platformstate.Snapshot) {
+		snapshot.RagTraceRuns = runRecords
+		snapshot.RagTraceNodes = nodeRecords
+	})
+}
+
 // Service 提供 RAG Trace 查询与记录能力。
 type Service struct {
 	mu    sync.RWMutex
@@ -108,52 +209,34 @@ type Service struct {
 	nodes map[string][]Node
 
 	newID func() string
-	store *platformstate.FileStore
+	repo  Repository
 }
 
 // NewService 创建 Trace 服务，并写入一条初始示例数据。
 func NewService(store *platformstate.FileStore) *Service {
+	var repo Repository
+	if store != nil {
+		repo = &fileStoreRepository{store: store}
+	}
+	return NewServiceWithRepository(repo)
+}
+
+// NewServiceWithRepository 创建基于指定仓储的 Trace 服务。
+func NewServiceWithRepository(repo Repository) *Service {
 	service := &Service{
 		runs:  make(map[string]Run),
 		nodes: make(map[string][]Node),
 		newID: func() string {
 			return strings.ReplaceAll(guid.S(), "-", "")
 		},
-		store: store,
+		repo: repo,
 	}
-	if snapshot, err := service.loadSnapshot(); err == nil && len(snapshot.RagTraceRuns) > 0 {
-		for _, run := range snapshot.RagTraceRuns {
-			service.runs[run.TraceID] = Run{
-				TraceID:        run.TraceID,
-				TraceName:      run.TraceName,
-				EntryMethod:    run.EntryMethod,
-				ConversationID: run.ConversationID,
-				TaskID:         run.TaskID,
-				UserName:       run.UserName,
-				UserID:         run.UserID,
-				Status:         run.Status,
-				ErrorMessage:   run.ErrorMessage,
-				DurationMs:     run.DurationMs,
-				StartTime:      run.StartTime,
-				EndTime:        run.EndTime,
-			}
+	if runs, nodes, err := service.loadRecords(); err == nil && len(runs) > 0 {
+		for _, run := range runs {
+			service.runs[run.TraceID] = run
 		}
-		for _, node := range snapshot.RagTraceNodes {
-			service.nodes[node.TraceID] = append(service.nodes[node.TraceID], Node{
-				TraceID:      node.TraceID,
-				NodeID:       node.NodeID,
-				ParentNodeID: node.ParentNodeID,
-				Depth:        node.Depth,
-				NodeType:     node.NodeType,
-				NodeName:     node.NodeName,
-				ClassName:    node.ClassName,
-				MethodName:   node.MethodName,
-				Status:       node.Status,
-				ErrorMessage: node.ErrorMessage,
-				DurationMs:   node.DurationMs,
-				StartTime:    node.StartTime,
-				EndTime:      node.EndTime,
-			})
+		for _, node := range nodes {
+			service.nodes[node.TraceID] = append(service.nodes[node.TraceID], node)
 		}
 	} else {
 		service.seed()
@@ -161,11 +244,11 @@ func NewService(store *platformstate.FileStore) *Service {
 	return service
 }
 
-func (s *Service) loadSnapshot() (platformstate.Snapshot, error) {
-	if s.store == nil {
-		return platformstate.Snapshot{}, nil
+func (s *Service) loadRecords() ([]Run, []Node, error) {
+	if s.repo == nil {
+		return nil, nil, nil
 	}
-	return s.store.Load()
+	return s.repo.LoadTraceRecords()
 }
 
 // PageRuns 返回链路运行分页数据。
@@ -524,55 +607,25 @@ func defaultString(value, fallback string) string {
 }
 
 func (s *Service) persistLocked() error {
-	if s.store == nil {
+	if s.repo == nil {
 		return nil
 	}
-	runRecords := make([]platformstate.RagTraceRunRecord, 0, len(s.runs))
+	runs := make([]Run, 0, len(s.runs))
 	for _, run := range s.runs {
-		runRecords = append(runRecords, platformstate.RagTraceRunRecord{
-			TraceID:        run.TraceID,
-			TraceName:      run.TraceName,
-			EntryMethod:    run.EntryMethod,
-			ConversationID: run.ConversationID,
-			TaskID:         run.TaskID,
-			UserName:       run.UserName,
-			UserID:         run.UserID,
-			Status:         run.Status,
-			ErrorMessage:   run.ErrorMessage,
-			DurationMs:     run.DurationMs,
-			StartTime:      run.StartTime,
-			EndTime:        run.EndTime,
-		})
+		runs = append(runs, run)
 	}
-	nodeRecords := make([]platformstate.RagTraceNodeRecord, 0)
-	for _, nodes := range s.nodes {
-		for _, node := range nodes {
-			nodeRecords = append(nodeRecords, platformstate.RagTraceNodeRecord{
-				TraceID:      node.TraceID,
-				NodeID:       node.NodeID,
-				ParentNodeID: node.ParentNodeID,
-				Depth:        node.Depth,
-				NodeType:     node.NodeType,
-				NodeName:     node.NodeName,
-				ClassName:    node.ClassName,
-				MethodName:   node.MethodName,
-				Status:       node.Status,
-				ErrorMessage: node.ErrorMessage,
-				DurationMs:   node.DurationMs,
-				StartTime:    node.StartTime,
-				EndTime:      node.EndTime,
-			})
+	nodes := make([]Node, 0)
+	for _, traceNodes := range s.nodes {
+		for _, node := range traceNodes {
+			nodes = append(nodes, node)
 		}
 	}
-	sort.Slice(runRecords, func(i, j int) bool { return runRecords[i].StartTime.After(runRecords[j].StartTime) })
-	sort.Slice(nodeRecords, func(i, j int) bool {
-		if nodeRecords[i].TraceID == nodeRecords[j].TraceID {
-			return nodeRecords[i].StartTime.Before(nodeRecords[j].StartTime)
+	sort.Slice(runs, func(i, j int) bool { return runs[i].StartTime.After(runs[j].StartTime) })
+	sort.Slice(nodes, func(i, j int) bool {
+		if nodes[i].TraceID == nodes[j].TraceID {
+			return nodes[i].StartTime.Before(nodes[j].StartTime)
 		}
-		return nodeRecords[i].TraceID < nodeRecords[j].TraceID
+		return nodes[i].TraceID < nodes[j].TraceID
 	})
-	return s.store.Update(func(snapshot *platformstate.Snapshot) {
-		snapshot.RagTraceRuns = runRecords
-		snapshot.RagTraceNodes = nodeRecords
-	})
+	return s.repo.SaveTraceRecords(runs, nodes)
 }
