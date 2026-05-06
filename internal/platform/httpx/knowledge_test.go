@@ -7,6 +7,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -503,6 +504,13 @@ func TestKnowledgeDocumentAndChunkLifecycle(t *testing.T) {
 	}
 	if chunksBody.Data.Total == 0 || len(chunksBody.Data.Records) == 0 {
 		t.Fatal("expected chunk records after start chunk")
+	}
+	combinedChunkContent := ""
+	for _, chunk := range chunksBody.Data.Records {
+		combinedChunkContent += chunk.Content
+	}
+	if !strings.Contains(combinedChunkContent, "这是测试文档内容") {
+		t.Fatalf("expected chunk content from uploaded file, got %s", combinedChunkContent)
 	}
 	seedChunkID := chunksBody.Data.Records[0].ID
 

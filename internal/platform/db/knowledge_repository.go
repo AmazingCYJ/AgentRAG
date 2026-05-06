@@ -35,6 +35,7 @@ func (r *SQLKnowledgeRepository) Bootstrap() error {
     doc_name TEXT NOT NULL,
     source_type TEXT NOT NULL DEFAULT '',
     source_location TEXT NOT NULL DEFAULT '',
+    text_content TEXT NOT NULL DEFAULT '',
     schedule_enabled INTEGER NOT NULL DEFAULT 0,
     schedule_cron TEXT NOT NULL DEFAULT '',
     enabled BOOLEAN NOT NULL DEFAULT TRUE,
@@ -91,6 +92,8 @@ func (r *SQLKnowledgeRepository) Bootstrap() error {
 			return err
 		}
 	}
+	// 兼容已存在的早期本地库；列已存在时忽略错误。
+	_, _ = r.database.Exec(`ALTER TABLE agentrag_knowledge_documents ADD COLUMN text_content TEXT NOT NULL DEFAULT ''`)
 	return nil
 }
 
@@ -138,7 +141,7 @@ ORDER BY create_time DESC`)
 
 func (r *SQLKnowledgeRepository) loadKnowledgeDocuments() ([]domainknowledge.KnowledgeDocument, error) {
 	rows, err := r.database.Query(`
-SELECT id, kb_id, doc_name, source_type, source_location, schedule_enabled, schedule_cron,
+SELECT id, kb_id, doc_name, source_type, source_location, text_content, schedule_enabled, schedule_cron,
        enabled, chunk_count, file_url, file_type, file_size, process_mode, chunk_strategy,
        chunk_config, pipeline_id, status, created_by, updated_by, create_time, update_time
 FROM agentrag_knowledge_documents
@@ -157,6 +160,7 @@ ORDER BY create_time DESC`)
 			&item.DocName,
 			&item.SourceType,
 			&item.SourceLocation,
+			&item.TextContent,
 			&item.ScheduleEnabled,
 			&item.ScheduleCron,
 			&item.Enabled,
@@ -301,10 +305,10 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
 func saveKnowledgeDocuments(tx *sql.Tx, items []domainknowledge.KnowledgeDocument) error {
 	stmt, err := tx.Prepare(`
 INSERT INTO agentrag_knowledge_documents
-    (id, kb_id, doc_name, source_type, source_location, schedule_enabled, schedule_cron,
+    (id, kb_id, doc_name, source_type, source_location, text_content, schedule_enabled, schedule_cron,
      enabled, chunk_count, file_url, file_type, file_size, process_mode, chunk_strategy,
      chunk_config, pipeline_id, status, created_by, updated_by, create_time, update_time)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return err
 	}
@@ -316,6 +320,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 			item.DocName,
 			item.SourceType,
 			item.SourceLocation,
+			item.TextContent,
 			item.ScheduleEnabled,
 			item.ScheduleCron,
 			item.Enabled,

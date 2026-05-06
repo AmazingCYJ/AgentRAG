@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strings"
 
@@ -50,13 +51,18 @@ func (h *KnowledgeDocumentHandler) Upload(r *ghttp.Request) {
 		return
 	}
 	file, fileHeader, _ := r.Request.FormFile("file")
+	textContent := ""
 	if file != nil {
+		if content, readErr := io.ReadAll(io.LimitReader(file, 4<<20)); readErr == nil {
+			textContent = string(content)
+		}
 		_ = file.Close()
 	}
 
 	item, err := h.knowledgeService.UploadDocument(r.Get("kb-id").String(), domainknowledge.KnowledgeDocumentUploadRequest{
 		SourceType:      r.Request.FormValue("sourceType"),
 		SourceLocation:  r.Request.FormValue("sourceLocation"),
+		TextContent:     textContent,
 		ScheduleEnabled: strings.EqualFold(r.Request.FormValue("scheduleEnabled"), "true"),
 		ScheduleCron:    r.Request.FormValue("scheduleCron"),
 		ProcessMode:     r.Request.FormValue("processMode"),

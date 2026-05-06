@@ -68,6 +68,7 @@ type KnowledgeDocument struct {
 	DocName         string    `json:"docName"`
 	SourceType      string    `json:"sourceType,omitempty"`
 	SourceLocation  string    `json:"sourceLocation,omitempty"`
+	TextContent     string    `json:"-"`
 	ScheduleEnabled int       `json:"scheduleEnabled,omitempty"`
 	ScheduleCron    string    `json:"scheduleCron,omitempty"`
 	Enabled         bool      `json:"enabled"`
@@ -156,6 +157,7 @@ type KnowledgeBasePageRequest struct {
 type KnowledgeDocumentUploadRequest struct {
 	SourceType      string
 	SourceLocation  string
+	TextContent     string
 	ScheduleEnabled bool
 	ScheduleCron    string
 	ProcessMode     string
@@ -245,6 +247,7 @@ func (r *fileStoreRepository) LoadKnowledgeRecords() ([]KnowledgeBase, []Knowled
 			DocName:         item.DocName,
 			SourceType:      item.SourceType,
 			SourceLocation:  item.SourceLocation,
+			TextContent:     item.TextContent,
 			ScheduleEnabled: item.ScheduleEnabled,
 			ScheduleCron:    item.ScheduleCron,
 			Enabled:         item.Enabled,
@@ -330,6 +333,7 @@ func (r *fileStoreRepository) SaveKnowledgeRecords(bases []KnowledgeBase, docs [
 			DocName:         item.DocName,
 			SourceType:      item.SourceType,
 			SourceLocation:  item.SourceLocation,
+			TextContent:     item.TextContent,
 			ScheduleEnabled: item.ScheduleEnabled,
 			ScheduleCron:    item.ScheduleCron,
 			Enabled:         item.Enabled,
@@ -620,6 +624,7 @@ func (s *Service) UploadDocument(kbID string, req KnowledgeDocumentUploadRequest
 		DocName:         docName,
 		SourceType:      normalizeSourceType(req.SourceType),
 		SourceLocation:  strings.TrimSpace(req.SourceLocation),
+		TextContent:     normalizeTextContent(req.TextContent),
 		ScheduleEnabled: boolToInt(req.ScheduleEnabled),
 		ScheduleCron:    strings.TrimSpace(req.ScheduleCron),
 		Enabled:         true,
@@ -714,11 +719,7 @@ func (s *Service) StartDocumentChunk(docID string) error {
 	}
 
 	startTime := s.now()
-	chunkContents := []string{
-		item.DocName + " - 章节摘要",
-		"来源：" + defaultText(item.SourceLocation, item.DocName),
-		"当前处理模式：" + defaultText(item.ProcessMode, "chunk"),
-	}
+	chunkContents := buildChunkContents(item)
 	for index, content := range chunkContents {
 		s.createChunkLocked(item, KnowledgeChunkCreateRequest{
 			Content: content,
@@ -1240,6 +1241,74 @@ func inferFileURL(docID, fileName string) string {
 		return ""
 	}
 	return "memory://" + docID + "/" + fileName
+}
+
+func normalizeTextContent(content string) string {
+	lines := strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n")
+	result := make([]string, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		result = append(result, line)
+	}
+	return strings.Join(result, "\n")
+}
+
+func buildChunkContents(doc KnowledgeDocument) []string {
+	if text := strings.TrimSpace(doc.TextContent); text != "" {
+		return splitTextIntoChunks(text, doc.ChunkStrategy)
+	}
+	return []string{
+		doc.DocName + " - 章节摘要",
+		"来源：" + defaultText(doc.SourceLocation, doc.DocName),
+		"当前处理模式：" + defaultText(doc.ProcessMode, "chunk"),
+	}
+}
+
+func splitTextIntoChunks(content, strategy string) []string {
+	paragraphs := strings.Split(normalizeTextContent(content), "\n")
+	chunks := make([]string, 0, len(paragraphs))
+	for _, paragraph := range paragraphs {
+		paragraph = strings.TrimSpace(paragraph)
+		if paragraph == "" {
+			continue
+		}
+		for _, chunk := range splitLongParagraph(paragraph, chunkTargetSize(strategy)) {
+			chunks = append(chunks, chunk)
+		}
+	}
+	if len(chunks) == 0 && strings.TrimSpace(content) != "" {
+		chunks = append(chunks, strings.TrimSpace(content))
+	}
+	return chunks
+}
+
+func splitLongParagraph(paragraph string, targetSize int) []string {
+	runes := []rune(strings.TrimSpace(paragraph))
+	if len(runes) == 0 {
+		return nil
+	}
+	if targetSize <= 0 || len(runes) <= targetSize {
+		return []string{string(runes)}
+	}
+	result := make([]string, 0, (len(runes)+targetSize-1)/targetSize)
+	for start := 0; start < len(runes); start += targetSize {
+		end := start + targetSize
+		if end > len(runes) {
+			end = len(runes)
+		}
+		result = append(result, string(runes[start:end]))
+	}
+	return result
+}
+
+func chunkTargetSize(strategy string) int {
+	if strings.EqualFold(strings.TrimSpace(strategy), "fixed_size") {
+		return 512
+	}
+	return 1400
 }
 
 func countChars(content string) int {

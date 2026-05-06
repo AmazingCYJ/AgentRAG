@@ -113,6 +113,50 @@ func TestBuildPromptContextReturnsRelevantChunks(t *testing.T) {
 	}
 }
 
+func TestStartDocumentChunkUsesUploadedTextContent(t *testing.T) {
+	service := NewService(nil)
+	kbID, err := service.CreateKnowledgeBase(KnowledgeBaseCreateRequest{
+		Name:           "制度文档库",
+		EmbeddingModel: "embedding-openai-large",
+		CollectionName: "policydocs",
+		CreatedBy:      "admin",
+	})
+	if err != nil {
+		t.Fatalf("create knowledge base failed: %v", err)
+	}
+	doc, err := service.UploadDocument(kbID, KnowledgeDocumentUploadRequest{
+		SourceType:    "file",
+		FileName:      "报销制度.md",
+		TextContent:   "# 报销制度\n\n差旅报销需要提交发票和审批单。\n\n审批通过后由财务打款。",
+		ProcessMode:   "chunk",
+		ChunkStrategy: "structure_aware",
+	}, "admin")
+	if err != nil {
+		t.Fatalf("upload document failed: %v", err)
+	}
+
+	if err := service.StartDocumentChunk(doc.ID); err != nil {
+		t.Fatalf("start document chunk failed: %v", err)
+	}
+	page, err := service.PageChunks(doc.ID, KnowledgeChunkPageRequest{Current: 1, Size: 10})
+	if err != nil {
+		t.Fatalf("page chunks failed: %v", err)
+	}
+	if page.Total == 0 {
+		t.Fatal("expected chunks generated from uploaded text")
+	}
+	combined := ""
+	for _, chunk := range page.Records {
+		combined += chunk.Content
+	}
+	if !strings.Contains(combined, "差旅报销需要提交发票和审批单") {
+		t.Fatalf("expected chunks to contain uploaded content, got %s", combined)
+	}
+	if strings.Contains(combined, "当前处理模式") {
+		t.Fatalf("expected uploaded content chunks instead of synthetic chunks, got %s", combined)
+	}
+}
+
 type memoryKnowledgeRepository struct {
 	bases  []KnowledgeBase
 	docs   []KnowledgeDocument

@@ -84,6 +84,7 @@ type KnowledgeDocumentRecord struct {
 	DocName         string    `json:"docName"`
 	SourceType      string    `json:"sourceType,omitempty"`
 	SourceLocation  string    `json:"sourceLocation,omitempty"`
+	TextContent     string    `json:"textContent,omitempty"`
 	ScheduleEnabled int       `json:"scheduleEnabled,omitempty"`
 	ScheduleCron    string    `json:"scheduleCron,omitempty"`
 	Enabled         bool      `json:"enabled"`

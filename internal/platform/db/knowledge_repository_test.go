@@ -38,6 +38,7 @@ func TestSQLKnowledgeRepositorySavesAndLoadsRecords(t *testing.T) {
 		DocName:         "SQL 文档.md",
 		SourceType:      "file",
 		SourceLocation:  "SQL 文档.md",
+		TextContent:     "SQL 文档正文内容",
 		ScheduleEnabled: 1,
 		ScheduleCron:    "0 0 * * *",
 		Enabled:         true,
@@ -103,7 +104,7 @@ func TestSQLKnowledgeRepositorySavesAndLoadsRecords(t *testing.T) {
 	if len(bases) != 1 || bases[0].Name != "SQL 知识库" {
 		t.Fatalf("unexpected bases %#v", bases)
 	}
-	if len(docs) != 1 || docs[0].DocName != "SQL 文档.md" || !docs[0].Enabled {
+	if len(docs) != 1 || docs[0].DocName != "SQL 文档.md" || docs[0].TextContent != "SQL 文档正文内容" || !docs[0].Enabled {
 		t.Fatalf("unexpected docs %#v", docs)
 	}
 	if len(chunks) != 1 || chunks[0].Content != "SQL Chunk 内容" {
