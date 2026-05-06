@@ -19,6 +19,7 @@ var (
 
 // Run 表示链路运行记录。
 type Run struct {
+	ID             string    `json:"id,omitempty"`
 	TraceID        string    `json:"traceId"`
 	TraceName      string    `json:"traceName,omitempty"`
 	EntryMethod    string    `json:"entryMethod,omitempty"`
@@ -29,12 +30,14 @@ type Run struct {
 	Status         string    `json:"status,omitempty"`
 	ErrorMessage   string    `json:"errorMessage,omitempty"`
 	DurationMs     int64     `json:"durationMs,omitempty"`
+	ExtraData      string    `json:"extraData,omitempty"`
 	StartTime      time.Time `json:"startTime,omitempty"`
 	EndTime        time.Time `json:"endTime,omitempty"`
 }
 
 // Node 表示链路节点明细。
 type Node struct {
+	ID           string    `json:"id,omitempty"`
 	TraceID      string    `json:"traceId"`
 	NodeID       string    `json:"nodeId"`
 	ParentNodeID string    `json:"parentNodeId,omitempty"`
@@ -46,6 +49,7 @@ type Node struct {
 	Status       string    `json:"status,omitempty"`
 	ErrorMessage string    `json:"errorMessage,omitempty"`
 	DurationMs   int64     `json:"durationMs,omitempty"`
+	ExtraData    string    `json:"extraData,omitempty"`
 	StartTime    time.Time `json:"startTime,omitempty"`
 	EndTime      time.Time `json:"endTime,omitempty"`
 }
@@ -122,6 +126,7 @@ func (r *fileStoreRepository) LoadTraceRecords() ([]Run, []Node, error) {
 	runs := make([]Run, 0, len(snapshot.RagTraceRuns))
 	for _, run := range snapshot.RagTraceRuns {
 		runs = append(runs, Run{
+			ID:             run.ID,
 			TraceID:        run.TraceID,
 			TraceName:      run.TraceName,
 			EntryMethod:    run.EntryMethod,
@@ -132,6 +137,7 @@ func (r *fileStoreRepository) LoadTraceRecords() ([]Run, []Node, error) {
 			Status:         run.Status,
 			ErrorMessage:   run.ErrorMessage,
 			DurationMs:     run.DurationMs,
+			ExtraData:      run.ExtraData,
 			StartTime:      run.StartTime,
 			EndTime:        run.EndTime,
 		})
@@ -139,6 +145,7 @@ func (r *fileStoreRepository) LoadTraceRecords() ([]Run, []Node, error) {
 	nodes := make([]Node, 0, len(snapshot.RagTraceNodes))
 	for _, node := range snapshot.RagTraceNodes {
 		nodes = append(nodes, Node{
+			ID:           node.ID,
 			TraceID:      node.TraceID,
 			NodeID:       node.NodeID,
 			ParentNodeID: node.ParentNodeID,
@@ -150,6 +157,7 @@ func (r *fileStoreRepository) LoadTraceRecords() ([]Run, []Node, error) {
 			Status:       node.Status,
 			ErrorMessage: node.ErrorMessage,
 			DurationMs:   node.DurationMs,
+			ExtraData:    node.ExtraData,
 			StartTime:    node.StartTime,
 			EndTime:      node.EndTime,
 		})
@@ -164,6 +172,7 @@ func (r *fileStoreRepository) SaveTraceRecords(runs []Run, nodes []Node) error {
 	runRecords := make([]platformstate.RagTraceRunRecord, 0, len(runs))
 	for _, run := range runs {
 		runRecords = append(runRecords, platformstate.RagTraceRunRecord{
+			ID:             run.ID,
 			TraceID:        run.TraceID,
 			TraceName:      run.TraceName,
 			EntryMethod:    run.EntryMethod,
@@ -174,6 +183,7 @@ func (r *fileStoreRepository) SaveTraceRecords(runs []Run, nodes []Node) error {
 			Status:         run.Status,
 			ErrorMessage:   run.ErrorMessage,
 			DurationMs:     run.DurationMs,
+			ExtraData:      run.ExtraData,
 			StartTime:      run.StartTime,
 			EndTime:        run.EndTime,
 		})
@@ -181,6 +191,7 @@ func (r *fileStoreRepository) SaveTraceRecords(runs []Run, nodes []Node) error {
 	nodeRecords := make([]platformstate.RagTraceNodeRecord, 0, len(nodes))
 	for _, node := range nodes {
 		nodeRecords = append(nodeRecords, platformstate.RagTraceNodeRecord{
+			ID:           node.ID,
 			TraceID:      node.TraceID,
 			NodeID:       node.NodeID,
 			ParentNodeID: node.ParentNodeID,
@@ -192,6 +203,7 @@ func (r *fileStoreRepository) SaveTraceRecords(runs []Run, nodes []Node) error {
 			Status:       node.Status,
 			ErrorMessage: node.ErrorMessage,
 			DurationMs:   node.DurationMs,
+			ExtraData:    node.ExtraData,
 			StartTime:    node.StartTime,
 			EndTime:      node.EndTime,
 		})
@@ -359,6 +371,7 @@ func (s *Service) RecordChatTrace(record ChatTraceRecord) string {
 	}
 
 	run := Run{
+		ID:             "run_" + s.newID(),
 		TraceID:        traceID,
 		TraceName:      defaultTraceName(record.TraceName),
 		EntryMethod:    "RAGChatController.chat",
@@ -393,6 +406,7 @@ func (s *Service) copyNodesLocked(traceID string) []Node {
 func (s *Service) seed() {
 	now := time.Now().Add(-20 * time.Minute)
 	run := Run{
+		ID:             "run_seed_demo",
 		TraceID:        "trace_seed_demo",
 		TraceName:      "示例链路",
 		EntryMethod:    "RAGChatController.chat",
@@ -407,6 +421,7 @@ func (s *Service) seed() {
 	}
 	nodes := []Node{
 		{
+			ID:         "node_seed_entry",
 			TraceID:    run.TraceID,
 			NodeID:     "node-entry",
 			Depth:      0,
@@ -420,6 +435,7 @@ func (s *Service) seed() {
 			EndTime:    run.EndTime,
 		},
 		{
+			ID:           "node_seed_generate",
 			TraceID:      run.TraceID,
 			NodeID:       "node-generate",
 			ParentNodeID: "node-entry",
@@ -501,6 +517,7 @@ func buildChatNodes(traceID string, run Run, deepThinking bool, steps []ChatTrac
 			nodeEnd = end
 		}
 		return Node{
+			ID:           traceID + "_" + id,
 			TraceID:      traceID,
 			NodeID:       id,
 			ParentNodeID: parentID,
@@ -519,7 +536,7 @@ func buildChatNodes(traceID string, run Run, deepThinking bool, steps []ChatTrac
 
 	nodes := []Node{
 		makeNode("node-entry", "", 0, "ENTRY", "Chat Entry", "RAGChatController", "chat", 0, total, run.Status, run.ErrorMessage),
-		makeNode("node-memory", "node-entry", 1, "MEMORY", "Load Conversation", "ConversationService", "ListMessages", 0, maxInt64(40, total/8), "success", ""),
+		makeNode("node-memory", "node-entry", 1, "MEMORY", "Load Conversation", "ConversationService", "ListMessages", 0, maxInt64(40, total/8), "SUCCESS", ""),
 	}
 
 	offset := maxInt64(40, total/8)

@@ -163,6 +163,7 @@ type ConversationMessageRecord struct {
 
 // RagTraceRunRecord 定义持久化到磁盘的 Trace 运行记录。
 type RagTraceRunRecord struct {
+	ID             string    `json:"id,omitempty"`
 	TraceID        string    `json:"traceId"`
 	TraceName      string    `json:"traceName,omitempty"`
 	EntryMethod    string    `json:"entryMethod,omitempty"`
@@ -173,12 +174,14 @@ type RagTraceRunRecord struct {
 	Status         string    `json:"status,omitempty"`
 	ErrorMessage   string    `json:"errorMessage,omitempty"`
 	DurationMs     int64     `json:"durationMs,omitempty"`
+	ExtraData      string    `json:"extraData,omitempty"`
 	StartTime      time.Time `json:"startTime,omitempty"`
 	EndTime        time.Time `json:"endTime,omitempty"`
 }
 
 // RagTraceNodeRecord 定义持久化到磁盘的 Trace 节点记录。
 type RagTraceNodeRecord struct {
+	ID           string    `json:"id,omitempty"`
 	TraceID      string    `json:"traceId"`
 	NodeID       string    `json:"nodeId"`
 	ParentNodeID string    `json:"parentNodeId,omitempty"`
@@ -190,6 +193,7 @@ type RagTraceNodeRecord struct {
 	Status       string    `json:"status,omitempty"`
 	ErrorMessage string    `json:"errorMessage,omitempty"`
 	DurationMs   int64     `json:"durationMs,omitempty"`
+	ExtraData    string    `json:"extraData,omitempty"`
 	StartTime    time.Time `json:"startTime,omitempty"`
 	EndTime      time.Time `json:"endTime,omitempty"`
 }
