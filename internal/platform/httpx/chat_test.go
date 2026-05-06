@@ -293,7 +293,7 @@ func TestChatRouteUsesMCPToolContextWhenIntentMatches(t *testing.T) {
 	defer response.Body.Close()
 
 	events := readSSEEventsUntilDone(t, response.Body)
-	foundWeather := false
+	var answer strings.Builder
 	for _, event := range events {
 		if event.Name != "message" {
 			continue
@@ -305,12 +305,15 @@ func TestChatRouteUsesMCPToolContextWhenIntentMatches(t *testing.T) {
 		if err := json.Unmarshal(event.Data, &payload); err != nil {
 			t.Fatalf("decode message payload failed: %v", err)
 		}
-		if payload.Type == "response" && strings.Contains(payload.Delta, "北京") {
-			foundWeather = true
+		if payload.Type == "response" {
+			answer.WriteString(payload.Delta)
 		}
 	}
-	if !foundWeather {
-		t.Fatal("expected response to contain weather tool context")
+	if !strings.Contains(answer.String(), "晴") {
+		t.Fatalf("expected response to contain weather tool context, got %s", answer.String())
+	}
+	if strings.Contains(answer.String(), "占位答案") || strings.Contains(answer.String(), "最小可用回答") {
+		t.Fatalf("expected tool context answer instead of placeholder, got %s", answer.String())
 	}
 }
 

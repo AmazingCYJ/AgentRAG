@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -112,6 +113,27 @@ func TestRetrievalGeneratorInjectsKnowledgeContext(t *testing.T) {
 	}
 	if base.lastReq.KnowledgeContext != "文档《OA请假手册》：请先进入审批中心。" {
 		t.Fatalf("unexpected knowledge context %s", base.lastReq.KnowledgeContext)
+	}
+}
+
+func TestFallbackGeneratorUsesKnowledgeContextWhenModelUnavailable(t *testing.T) {
+	generator := &fallbackGenerator{}
+
+	result, err := generator.Generate(context.Background(), GenerateRequest{
+		Question:         "怎么配置请假流程",
+		KnowledgeContext: "文档《OA请假手册》：请先进入审批中心，再选择请假流程模板。",
+	})
+	if err != nil {
+		t.Fatalf("fallback generate failed: %v", err)
+	}
+	if result.Answer == "" {
+		t.Fatal("expected fallback answer")
+	}
+	if !strings.Contains(result.Answer, "审批中心") {
+		t.Fatalf("expected answer to use knowledge context, got %s", result.Answer)
+	}
+	if strings.Contains(result.Answer, "占位答案") || strings.Contains(result.Answer, "最小可用回答") {
+		t.Fatalf("fallback should not return placeholder text when context exists, got %s", result.Answer)
 	}
 }
 

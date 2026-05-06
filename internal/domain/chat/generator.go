@@ -108,7 +108,7 @@ func (g *fallbackGenerator) Generate(_ context.Context, req GenerateRequest) (Ge
 	}
 	return GenerateResult{
 		Thinking: thinking,
-		Answer:   buildResponseText(req.Question, req.DeepThinking),
+		Answer:   buildResponseText(req.Question, req.DeepThinking, req.KnowledgeContext),
 		Steps: []WorkflowStep{
 			{
 				NodeID:     "fallback_generate",

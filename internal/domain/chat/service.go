@@ -317,11 +317,23 @@ func buildThinkingText(question string) string {
 	return "正在分析你的问题并整理与“" + question + "”相关的上下文。"
 }
 
-func buildResponseText(question string, deepThinking bool) string {
-	if deepThinking {
-		return "我已经收到你的问题：“" + question + "”。当前阶段先返回兼容前端的流式占位答案，后续会继续接入 Eino 工作流、检索链路与工具调用。"
+func buildResponseText(question string, deepThinking bool, knowledgeContext string) string {
+	contextText := strings.TrimSpace(knowledgeContext)
+	if contextText != "" {
+		return "根据当前可用上下文，关于“" + question + "”的回答如下：\n\n" + compactContextAnswer(contextText)
 	}
-	return "我已经收到你的问题：“" + question + "”。当前阶段返回的是最小可用回答，后续会继续补齐完整 RAG 能力。"
+	if deepThinking {
+		return "我已经收到你的问题：“" + question + "”。当前未配置可用模型，也没有检索到可引用上下文，因此只能返回本地兜底说明。"
+	}
+	return "我已经收到你的问题：“" + question + "”。当前未配置可用模型，也没有检索到可引用上下文。"
+}
+
+func compactContextAnswer(contextText string) string {
+	runes := []rune(strings.TrimSpace(contextText))
+	if len(runes) <= 600 {
+		return string(runes)
+	}
+	return string(runes[:600]) + "..."
 }
 
 func buildConversationTitle(question string) string {
