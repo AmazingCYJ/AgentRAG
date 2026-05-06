@@ -49,23 +49,28 @@ func TestConversationStatePersistsAcrossServiceRecreation(t *testing.T) {
 }
 
 type memoryConversationRepository struct {
-	sessions []Session
-	messages []Message
+	sessions  []Session
+	messages  []Message
+	feedbacks []Feedback
 }
 
-func (r *memoryConversationRepository) LoadConversations() ([]Session, []Message, error) {
+func (r *memoryConversationRepository) LoadConversations() ([]Session, []Message, []Feedback, error) {
 	sessions := make([]Session, len(r.sessions))
 	copy(sessions, r.sessions)
 	messages := make([]Message, len(r.messages))
 	copy(messages, r.messages)
-	return sessions, messages, nil
+	feedbacks := make([]Feedback, len(r.feedbacks))
+	copy(feedbacks, r.feedbacks)
+	return sessions, messages, feedbacks, nil
 }
 
-func (r *memoryConversationRepository) SaveConversations(sessions []Session, messages []Message) error {
+func (r *memoryConversationRepository) SaveConversations(sessions []Session, messages []Message, feedbacks []Feedback) error {
 	r.sessions = make([]Session, len(sessions))
 	copy(r.sessions, sessions)
 	r.messages = make([]Message, len(messages))
 	copy(r.messages, messages)
+	r.feedbacks = make([]Feedback, len(feedbacks))
+	copy(r.feedbacks, feedbacks)
 	return nil
 }
 

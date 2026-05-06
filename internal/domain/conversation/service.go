@@ -40,6 +40,19 @@ type Message struct {
 	CreateTime       time.Time
 }
 
+// Feedback 表示用户对助手消息的反馈。
+type Feedback struct {
+	ID             string
+	MessageID      string
+	ConversationID string
+	UserID         string
+	Vote           int
+	Reason         string
+	Comment        string
+	CreateTime     time.Time
+	UpdateTime     time.Time
+}
+
 // SessionView 是前端会话列表所需结构。
 type SessionView struct {
 	ConversationID string    `json:"conversationId"`
@@ -61,21 +74,21 @@ type MessageView struct {
 
 // Repository 定义会话和消息持久化仓储。
 type Repository interface {
-	LoadConversations() ([]Session, []Message, error)
-	SaveConversations(sessions []Session, messages []Message) error
+	LoadConversations() ([]Session, []Message, []Feedback, error)
+	SaveConversations(sessions []Session, messages []Message, feedbacks []Feedback) error
 }
 
 type fileStoreRepository struct {
 	store *platformstate.FileStore
 }
 
-func (r *fileStoreRepository) LoadConversations() ([]Session, []Message, error) {
+func (r *fileStoreRepository) LoadConversations() ([]Session, []Message, []Feedback, error) {
 	if r == nil || r.store == nil {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	snapshot, err := r.store.Load()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	sessions := make([]Session, 0, len(snapshot.ConversationSessions))
 	for _, record := range snapshot.ConversationSessions {
@@ -87,6 +100,7 @@ func (r *fileStoreRepository) LoadConversations() ([]Session, []Message, error) 
 		})
 	}
 	messages := make([]Message, 0, len(snapshot.ConversationMessages))
+	feedbacks := make([]Feedback, 0)
 	for _, record := range snapshot.ConversationMessages {
 		messages = append(messages, Message{
 			ID:               record.ID,
@@ -99,11 +113,22 @@ func (r *fileStoreRepository) LoadConversations() ([]Session, []Message, error) 
 			Vote:             cloneIntPointer(record.Vote),
 			CreateTime:       record.CreateTime,
 		})
+		if record.Vote != nil {
+			feedbacks = append(feedbacks, Feedback{
+				ID:             record.ID + "_" + record.UserID,
+				MessageID:      record.ID,
+				ConversationID: record.ConversationID,
+				UserID:         record.UserID,
+				Vote:           *record.Vote,
+				CreateTime:     record.CreateTime,
+				UpdateTime:     record.CreateTime,
+			})
+		}
 	}
-	return sessions, messages, nil
+	return sessions, messages, feedbacks, nil
 }
 
-func (r *fileStoreRepository) SaveConversations(sessions []Session, messages []Message) error {
+func (r *fileStoreRepository) SaveConversations(sessions []Session, messages []Message, feedbacks []Feedback) error {
 	if r == nil || r.store == nil {
 		return nil
 	}
@@ -116,8 +141,19 @@ func (r *fileStoreRepository) SaveConversations(sessions []Session, messages []M
 			LastTime:       session.LastTime,
 		})
 	}
+	feedbackByMessage := make(map[string]Feedback, len(feedbacks))
+	for _, feedback := range feedbacks {
+		feedbackByMessage[feedback.UserID+"|"+feedback.MessageID] = feedback
+	}
 	messageRecords := make([]platformstate.ConversationMessageRecord, 0, len(messages))
 	for _, message := range messages {
+		var vote *int
+		if feedback, ok := feedbackByMessage[message.UserID+"|"+message.ID]; ok {
+			value := feedback.Vote
+			vote = &value
+		} else {
+			vote = cloneIntPointer(message.Vote)
+		}
 		messageRecords = append(messageRecords, platformstate.ConversationMessageRecord{
 			ID:               message.ID,
 			ConversationID:   message.ConversationID,
@@ -126,7 +162,7 @@ func (r *fileStoreRepository) SaveConversations(sessions []Session, messages []M
 			Content:          message.Content,
 			ThinkingContent:  message.ThinkingContent,
 			ThinkingDuration: cloneIntPointer(message.ThinkingDuration),
-			Vote:             cloneIntPointer(message.Vote),
+			Vote:             vote,
 			CreateTime:       message.CreateTime,
 		})
 	}
@@ -141,6 +177,7 @@ type Service struct {
 	mu       sync.RWMutex
 	sessions map[string]map[string]Session
 	messages map[string]map[string][]Message
+	feedback map[string]map[string]Feedback
 	repo     Repository
 }
 
@@ -166,9 +203,10 @@ func NewServiceWithRepository(repo Repository) *Service {
 	service := &Service{
 		sessions: make(map[string]map[string]Session),
 		messages: make(map[string]map[string][]Message),
+		feedback: make(map[string]map[string]Feedback),
 		repo:     repo,
 	}
-	if sessions, messages, err := service.loadRecords(); err == nil {
+	if sessions, messages, feedbacks, err := service.loadRecords(); err == nil {
 		for _, session := range sessions {
 			if service.sessions[session.UserID] == nil {
 				service.sessions[session.UserID] = make(map[string]Session)
@@ -181,13 +219,19 @@ func NewServiceWithRepository(repo Repository) *Service {
 			}
 			service.messages[message.UserID][message.ConversationID] = append(service.messages[message.UserID][message.ConversationID], message)
 		}
+		for _, item := range feedbacks {
+			if service.feedback[item.UserID] == nil {
+				service.feedback[item.UserID] = make(map[string]Feedback)
+			}
+			service.feedback[item.UserID][item.MessageID] = item
+		}
 	}
 	return service
 }
 
-func (s *Service) loadRecords() ([]Session, []Message, error) {
+func (s *Service) loadRecords() ([]Session, []Message, []Feedback, error) {
 	if s.repo == nil {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	return s.repo.LoadConversations()
 }
@@ -211,6 +255,10 @@ func (s *Service) AppendMessage(message Message) {
 
 	if s.messages[message.UserID] == nil {
 		s.messages[message.UserID] = make(map[string][]Message)
+	}
+	if feedback, ok := s.feedback[message.UserID][message.ID]; ok {
+		vote := feedback.Vote
+		message.Vote = &vote
 	}
 	s.messages[message.UserID][message.ConversationID] = append(
 		s.messages[message.UserID][message.ConversationID],
@@ -256,6 +304,11 @@ func (s *Service) ListMessages(conversationID, userID string) []MessageView {
 	result := make([]MessageView, 0, len(records))
 	for _, item := range records {
 		createTime := item.CreateTime
+		vote := cloneIntPointer(item.Vote)
+		if feedback, ok := s.feedback[userID][item.ID]; ok {
+			value := feedback.Vote
+			vote = &value
+		}
 		result = append(result, MessageView{
 			ID:               item.ID,
 			ConversationID:   item.ConversationID,
@@ -263,7 +316,7 @@ func (s *Service) ListMessages(conversationID, userID string) []MessageView {
 			Content:          item.Content,
 			ThinkingContent:  item.ThinkingContent,
 			ThinkingDuration: item.ThinkingDuration,
-			Vote:             item.Vote,
+			Vote:             vote,
 			CreateTime:       &createTime,
 		})
 	}
@@ -316,6 +369,13 @@ func (s *Service) Delete(conversationID, userID string) error {
 	if s.messages[userID] != nil {
 		delete(s.messages[userID], conversationID)
 	}
+	if s.feedback[userID] != nil {
+		for messageID, feedback := range s.feedback[userID] {
+			if feedback.ConversationID == conversationID {
+				delete(s.feedback[userID], messageID)
+			}
+		}
+	}
 	if err := s.persistLocked(); err != nil {
 		return err
 	}
@@ -324,6 +384,11 @@ func (s *Service) Delete(conversationID, userID string) error {
 
 // SubmitFeedback 更新指定消息的点赞或点踩状态。
 func (s *Service) SubmitFeedback(messageID, userID string, vote int) error {
+	return s.SubmitFeedbackDetail(messageID, userID, vote, "", "")
+}
+
+// SubmitFeedbackDetail 更新指定助手消息的反馈详情。
+func (s *Service) SubmitFeedbackDetail(messageID, userID string, vote int, reason, comment string) error {
 	if vote != 1 && vote != -1 {
 		return ErrInvalidVote
 	}
@@ -341,9 +406,31 @@ func (s *Service) SubmitFeedback(messageID, userID string, vote int) error {
 			if messages[index].ID != messageID {
 				continue
 			}
+			if !strings.EqualFold(messages[index].Role, "assistant") {
+				return ErrMessageNotFound
+			}
 			nextVote := vote
 			messages[index].Vote = &nextVote
 			records[conversationID] = messages
+			now := time.Now()
+			if s.feedback[userID] == nil {
+				s.feedback[userID] = make(map[string]Feedback)
+			}
+			feedback, ok := s.feedback[userID][messageID]
+			if !ok {
+				feedback = Feedback{
+					ID:             messageID + "_" + userID,
+					MessageID:      messageID,
+					ConversationID: conversationID,
+					UserID:         userID,
+					CreateTime:     now,
+				}
+			}
+			feedback.Vote = vote
+			feedback.Reason = strings.TrimSpace(reason)
+			feedback.Comment = strings.TrimSpace(comment)
+			feedback.UpdateTime = now
+			s.feedback[userID][messageID] = feedback
 			if err := s.persistLocked(); err != nil {
 				return err
 			}
@@ -407,6 +494,12 @@ func (s *Service) persistLocked() error {
 			}
 		}
 	}
+	feedbacks := make([]Feedback, 0)
+	for _, feedbackByUser := range s.feedback {
+		for _, feedback := range feedbackByUser {
+			feedbacks = append(feedbacks, feedback)
+		}
+	}
 	sort.Slice(sessions, func(i, j int) bool {
 		if sessions[i].UserID == sessions[j].UserID {
 			return sessions[i].ConversationID < sessions[j].ConversationID
@@ -422,5 +515,11 @@ func (s *Service) persistLocked() error {
 		}
 		return messages[i].UserID < messages[j].UserID
 	})
-	return s.repo.SaveConversations(sessions, messages)
+	sort.Slice(feedbacks, func(i, j int) bool {
+		if feedbacks[i].UserID == feedbacks[j].UserID {
+			return feedbacks[i].MessageID < feedbacks[j].MessageID
+		}
+		return feedbacks[i].UserID < feedbacks[j].UserID
+	})
+	return s.repo.SaveConversations(sessions, messages, feedbacks)
 }

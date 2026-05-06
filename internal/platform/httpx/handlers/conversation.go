@@ -49,7 +49,9 @@ type renameConversationRequest struct {
 }
 
 type feedbackRequest struct {
-	Vote int `json:"vote"`
+	Vote    int    `json:"vote"`
+	Reason  string `json:"reason"`
+	Comment string `json:"comment"`
 }
 
 // Rename 更新指定会话标题。
@@ -99,7 +101,7 @@ func (h *ConversationHandler) SubmitFeedback(r *ghttp.Request) {
 		return
 	}
 
-	err = h.conversationService.SubmitFeedback(r.Get("messageId").String(), profile.UserID, req.Vote)
+	err = h.conversationService.SubmitFeedbackDetail(r.Get("messageId").String(), profile.UserID, req.Vote, req.Reason, req.Comment)
 	if err == nil {
 		resp.WriteSuccess(r, nil)
 		return
