@@ -144,7 +144,11 @@ func newServerWithDeps(cfg *appconfig.Config, name string, deps serverDeps) *ght
 	}
 	settingsService := deps.settingsService
 	if settingsService == nil {
-		settingsService = domainsettings.NewService()
+		if cfg == nil {
+			settingsService = domainsettings.NewService()
+		} else {
+			settingsService = domainsettings.NewService(cfg.AI)
+		}
 	}
 	sampleQuestionService := deps.sampleQuestionService
 	if sampleQuestionService == nil {

@@ -1,11 +1,23 @@
 package settings
 
+import (
+	"strings"
+
+	appconfig "github.com/AmazingCYJ/AgentRAG/internal/platform/config"
+)
+
 // Service 提供当前阶段只读系统配置视图。
-type Service struct{}
+type Service struct {
+	ai appconfig.AIConfig
+}
 
 // NewService 创建系统配置服务。
-func NewService() *Service {
-	return &Service{}
+func NewService(cfg ...appconfig.AIConfig) *Service {
+	service := &Service{}
+	if len(cfg) > 0 {
+		service.ai = cfg[0]
+	}
+	return service
 }
 
 // SystemSettings 定义前端系统配置页所需结构。
@@ -116,6 +128,11 @@ type ModelCandidate struct {
 
 // Get 返回当前阶段的默认系统配置。
 func (s *Service) Get() SystemSettings {
+	baseURL := strings.TrimSpace(s.ai.BaseURL)
+	if baseURL == "" {
+		baseURL = "https://api.openai.com/v1"
+	}
+	chatGroup := s.buildChatModelGroup(baseURL)
 	return SystemSettings{
 		Upload: UploadSettings{
 			MaxFileSize:    50 * 1024 * 1024,
@@ -153,7 +170,7 @@ func (s *Service) Get() SystemSettings {
 		AI: AISettings{
 			Providers: map[string]ProviderConfig{
 				"openai": {
-					URL: "https://api.openai.com/v1",
+					URL: baseURL,
 					Endpoints: map[string]string{
 						"chat":      "/chat/completions",
 						"embedding": "/embeddings",
@@ -175,28 +192,7 @@ func (s *Service) Get() SystemSettings {
 			Stream: StreamSettings{
 				MessageChunkSize: 32,
 			},
-			Chat: ModelGroup{
-				DefaultModel:      "gpt-4.1-mini",
-				DeepThinkingModel: "gpt-5",
-				Candidates: []ModelCandidate{
-					{
-						ID:               "chat-openai-gpt41mini",
-						Provider:         "openai",
-						Model:            "gpt-4.1-mini",
-						Priority:         1,
-						Enabled:          true,
-						SupportsThinking: false,
-					},
-					{
-						ID:               "chat-openai-gpt5",
-						Provider:         "openai",
-						Model:            "gpt-5",
-						Priority:         2,
-						Enabled:          true,
-						SupportsThinking: true,
-					},
-				},
-			},
+			Chat: chatGroup,
 			Embedding: ModelGroup{
 				DefaultModel: "embedding-openai-large",
 				Candidates: []ModelCandidate{
@@ -232,4 +228,53 @@ func (s *Service) Get() SystemSettings {
 			},
 		},
 	}
+}
+
+func (s *Service) buildChatModelGroup(baseURL string) ModelGroup {
+	defaultModel := strings.TrimSpace(s.ai.Model)
+	deepThinkingModel := strings.TrimSpace(s.ai.DeepThinkingModel)
+	if defaultModel == "" {
+		defaultModel = "gpt-4.1-mini"
+	}
+	if deepThinkingModel == "" {
+		deepThinkingModel = "gpt-5"
+	}
+
+	candidates := []ModelCandidate{
+		{
+			ID:               "chat-openai-" + normalizeModelID(defaultModel),
+			Provider:         "openai",
+			Model:            defaultModel,
+			URL:              baseURL,
+			Priority:         1,
+			Enabled:          true,
+			SupportsThinking: false,
+		},
+	}
+	if deepThinkingModel != "" && deepThinkingModel != defaultModel {
+		candidates = append(candidates, ModelCandidate{
+			ID:               "chat-openai-" + normalizeModelID(deepThinkingModel),
+			Provider:         "openai",
+			Model:            deepThinkingModel,
+			URL:              baseURL,
+			Priority:         2,
+			Enabled:          true,
+			SupportsThinking: true,
+		})
+	}
+	return ModelGroup{
+		DefaultModel:      defaultModel,
+		DeepThinkingModel: deepThinkingModel,
+		Candidates:        candidates,
+	}
+}
+
+func normalizeModelID(model string) string {
+	value := strings.ToLower(strings.TrimSpace(model))
+	replacer := strings.NewReplacer(".", "-", "_", "-", "/", "-", ":", "-")
+	value = replacer.Replace(value)
+	if value == "" {
+		return "default"
+	}
+	return value
 }
