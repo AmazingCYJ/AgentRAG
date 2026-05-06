@@ -182,3 +182,44 @@ func TestIngestionServiceLoadsAndPersistsThroughRepository(t *testing.T) {
 		t.Fatalf("expected repository to save 2 pipelines, got %d", len(repository.pipelines))
 	}
 }
+
+func TestUploadTaskStoresFileMetadata(t *testing.T) {
+	service := NewServiceWithRepository(nil)
+	pipeline, err := service.CreatePipeline(PipelineSaveRequest{
+		Name:      "上传采集流水线",
+		CreatedBy: "admin",
+		Nodes: []PipelineNodeRequest{
+			{NodeID: "parser", NodeType: "parser"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("create pipeline failed: %v", err)
+	}
+
+	result, err := service.UploadTask(UploadTaskRequest{
+		PipelineID: pipeline.ID,
+		FileName:   "upload.md",
+		FileSize:   27,
+		Content:    []byte("# Upload\n\n中文正文内容"),
+		CreatedBy:  "admin",
+	})
+	if err != nil {
+		t.Fatalf("upload task failed: %v", err)
+	}
+	task, err := service.GetTask(result.TaskID)
+	if err != nil {
+		t.Fatalf("get uploaded task failed: %v", err)
+	}
+	if task.SourceFileName != "upload.md" {
+		t.Fatalf("expected source file name upload.md, got %s", task.SourceFileName)
+	}
+	if task.Metadata["fileSize"] != int64(27) {
+		t.Fatalf("expected fileSize metadata 27, got %#v", task.Metadata)
+	}
+	if task.Metadata["contentPreview"] != "# Upload\n\n中文正文内容" {
+		t.Fatalf("expected content preview metadata, got %#v", task.Metadata)
+	}
+	if task.Metadata["mimeType"] == "" {
+		t.Fatalf("expected mimeType metadata, got %#v", task.Metadata)
+	}
+}

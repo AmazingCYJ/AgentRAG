@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 
 	domainauth "github.com/AmazingCYJ/AgentRAG/internal/domain/auth"
@@ -73,14 +74,20 @@ func (h *IngestionTaskHandler) Upload(r *ghttp.Request) {
 		resp.WriteError(r, http.StatusBadRequest, "400", "缺少上传文件")
 		return
 	}
-	_ = file.Close()
+	defer file.Close()
+	content, err := io.ReadAll(io.LimitReader(file, 4<<20))
+	if err != nil {
+		resp.WriteError(r, http.StatusBadRequest, "400", "读取上传文件失败")
+		return
+	}
 
-	result, err := h.ingestionService.UploadTask(
-		r.Get("pipelineId").String(),
-		fileHeader.Filename,
-		fileHeader.Size,
-		profile.Username,
-	)
+	result, err := h.ingestionService.UploadTask(domainingestion.UploadTaskRequest{
+		PipelineID: r.Get("pipelineId").String(),
+		FileName:   fileHeader.Filename,
+		FileSize:   fileHeader.Size,
+		Content:    content,
+		CreatedBy:  profile.Username,
+	})
 	if err != nil {
 		writeIngestionError(r, err)
 		return

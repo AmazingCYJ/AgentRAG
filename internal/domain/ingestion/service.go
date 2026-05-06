@@ -2,6 +2,7 @@ package ingestion
 
 import (
 	"errors"
+	"net/http"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -140,6 +141,15 @@ type TaskCreateRequest struct {
 	Metadata      map[string]any
 	VectorSpaceID map[string]any
 	CreatedBy     string
+}
+
+// UploadTaskRequest 定义上传文件触发任务的输入。
+type UploadTaskRequest struct {
+	PipelineID string
+	FileName   string
+	FileSize   int64
+	Content    []byte
+	CreatedBy  string
 }
 
 // Repository 定义导入流水线、任务和任务节点的持久化仓储。
@@ -504,7 +514,8 @@ func (s *Service) CreateTask(req TaskCreateRequest) (IngestionResult, error) {
 }
 
 // UploadTask 上传文件并执行任务。
-func (s *Service) UploadTask(pipelineID, fileName string, fileSize int64, createdBy string) (IngestionResult, error) {
+func (s *Service) UploadTask(upload UploadTaskRequest) (IngestionResult, error) {
+	pipelineID := strings.TrimSpace(upload.PipelineID)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -513,19 +524,23 @@ func (s *Service) UploadTask(pipelineID, fileName string, fileSize int64, create
 		return IngestionResult{}, ErrPipelineNotFound
 	}
 
-	req := TaskCreateRequest{
+	taskReq := TaskCreateRequest{
 		PipelineID: pipelineID,
 		Source: TaskSource{
 			Type:     "file",
-			Location: fileName,
-			FileName: fileName,
+			Location: strings.TrimSpace(upload.FileName),
+			FileName: strings.TrimSpace(upload.FileName),
 		},
 		Metadata: map[string]any{
-			"fileSize": fileSize,
+			"fileSize": upload.FileSize,
 		},
-		CreatedBy: createdBy,
+		CreatedBy: strings.TrimSpace(upload.CreatedBy),
 	}
-	result := s.createTaskLocked(pipeline, req)
+	if len(upload.Content) > 0 {
+		taskReq.Metadata["mimeType"] = detectUploadMIME(upload.Content, upload.FileName)
+		taskReq.Metadata["contentPreview"] = buildContentPreview(upload.Content, 2048)
+	}
+	result := s.createTaskLocked(pipeline, taskReq)
 	if err := s.persistLocked(); err != nil {
 		return IngestionResult{}, err
 	}
@@ -752,6 +767,32 @@ func maxInt(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func detectUploadMIME(content []byte, fileName string) string {
+	if len(content) > 0 {
+		return http.DetectContentType(content)
+	}
+	switch strings.ToLower(filepath.Ext(fileName)) {
+	case ".md", ".markdown":
+		return "text/markdown; charset=utf-8"
+	case ".txt", ".csv", ".json", ".yaml", ".yml":
+		return "text/plain; charset=utf-8"
+	default:
+		return "application/octet-stream"
+	}
+}
+
+func buildContentPreview(content []byte, limit int) string {
+	text := strings.ReplaceAll(string(content), "\r\n", "\n")
+	if limit <= 0 {
+		limit = 2048
+	}
+	runes := []rune(strings.TrimSpace(text))
+	if len(runes) > limit {
+		runes = runes[:limit]
+	}
+	return string(runes)
 }
 
 func (s *Service) persistLocked() error {

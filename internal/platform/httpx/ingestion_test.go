@@ -395,6 +395,21 @@ func TestIngestionPipelineAndTaskLifecycle(t *testing.T) {
 	if uploadTaskID == "" {
 		t.Fatal("expected uploaded task id")
 	}
+	uploadedTask := getIngestionTaskForTest(t, server.GetListenedPort(), token, uploadTaskID)
+	if uploadedTask.SourceFileName != "ingestion-demo.md" {
+		t.Fatalf("expected uploaded source file name ingestion-demo.md, got %s", uploadedTask.SourceFileName)
+	}
+	if uploadedTask.Metadata["fileSize"] == nil {
+		t.Fatalf("expected uploaded task metadata to contain fileSize, got %#v", uploadedTask.Metadata)
+	}
+	preview, _ := uploadedTask.Metadata["contentPreview"].(string)
+	if preview != "# Upload Task\n\nThis is a demo." {
+		t.Fatalf("expected uploaded content preview, got %#v", uploadedTask.Metadata)
+	}
+	mimeType, _ := uploadedTask.Metadata["mimeType"].(string)
+	if mimeType == "" {
+		t.Fatalf("expected uploaded task metadata to contain mimeType, got %#v", uploadedTask.Metadata)
+	}
 
 	deletePipelineRequest, err := http.NewRequest(
 		http.MethodDelete,
@@ -535,9 +550,11 @@ type ingestionPipelineTestResponse struct {
 }
 
 type ingestionTaskTestResponse struct {
-	ID         string `json:"id"`
-	PipelineID string `json:"pipelineId"`
-	Status     string `json:"status"`
+	ID             string         `json:"id"`
+	PipelineID     string         `json:"pipelineId"`
+	SourceFileName string         `json:"sourceFileName"`
+	Status         string         `json:"status"`
+	Metadata       map[string]any `json:"metadata"`
 }
 
 type ingestionTaskNodeTestResponse struct {
