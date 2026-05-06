@@ -157,6 +157,42 @@ func TestStartDocumentChunkUsesUploadedTextContent(t *testing.T) {
 	}
 }
 
+func TestEnableDocumentPersistsState(t *testing.T) {
+	repository := &memoryKnowledgeRepository{}
+	service := NewServiceWithRepository(repository)
+	kbID, err := service.CreateKnowledgeBase(KnowledgeBaseCreateRequest{
+		Name:           "启用状态知识库",
+		EmbeddingModel: "embedding-openai-large",
+		CollectionName: "enabledocs",
+		CreatedBy:      "admin",
+	})
+	if err != nil {
+		t.Fatalf("create knowledge base failed: %v", err)
+	}
+	doc, err := service.UploadDocument(kbID, KnowledgeDocumentUploadRequest{
+		SourceType:    "file",
+		FileName:      "开关状态.md",
+		ProcessMode:   "chunk",
+		ChunkStrategy: "structure_aware",
+	}, "admin")
+	if err != nil {
+		t.Fatalf("upload document failed: %v", err)
+	}
+
+	if err := service.EnableDocument(doc.ID, false); err != nil {
+		t.Fatalf("disable document failed: %v", err)
+	}
+
+	recreated := NewServiceWithRepository(repository)
+	recreatedDoc, err := recreated.GetDocument(doc.ID)
+	if err != nil {
+		t.Fatalf("get recreated document failed: %v", err)
+	}
+	if recreatedDoc.Enabled {
+		t.Fatal("expected disabled document state to persist")
+	}
+}
+
 type memoryKnowledgeRepository struct {
 	bases  []KnowledgeBase
 	docs   []KnowledgeDocument

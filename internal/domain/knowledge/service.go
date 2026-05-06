@@ -916,6 +916,9 @@ func (s *Service) EnableDocument(docID string, enabled bool) error {
 	item.Enabled = enabled
 	item.UpdateTime = s.now()
 	s.documents[docID] = item
+	if err := s.persistLocked(); err != nil {
+		return err
+	}
 	return nil
 }
 
