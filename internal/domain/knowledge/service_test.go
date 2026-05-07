@@ -113,6 +113,49 @@ func TestBuildPromptContextReturnsRelevantChunks(t *testing.T) {
 	}
 }
 
+func TestBuildPromptContextIncludesSourceMetadata(t *testing.T) {
+	service := NewService(nil)
+	kbID, err := service.CreateKnowledgeBase(KnowledgeBaseCreateRequest{
+		Name:           "流程知识库",
+		EmbeddingModel: "embedding-openai-large",
+		CollectionName: "flowdocs",
+		CreatedBy:      "admin",
+	})
+	if err != nil {
+		t.Fatalf("create knowledge base failed: %v", err)
+	}
+	doc, err := service.UploadDocument(kbID, KnowledgeDocumentUploadRequest{
+		SourceType:     "url",
+		SourceLocation: "https://example.com/flow.md",
+		FileName:       "流程手册.md",
+	}, "admin")
+	if err != nil {
+		t.Fatalf("upload document failed: %v", err)
+	}
+	_, err = service.CreateChunk(doc.ID, KnowledgeChunkCreateRequest{
+		Content: "审批流程需要先配置节点和负责人。",
+	})
+	if err != nil {
+		t.Fatalf("create chunk failed: %v", err)
+	}
+
+	contextText, err := service.BuildPromptContext(nil, "审批流程负责人怎么配置", 1)
+	if err != nil {
+		t.Fatalf("build prompt context failed: %v", err)
+	}
+	for _, expected := range []string{
+		"知识库：流程知识库",
+		"文档：流程手册.md",
+		"来源：https://example.com/flow.md",
+		"Chunk：0",
+		"审批流程需要先配置节点和负责人。",
+	} {
+		if !strings.Contains(contextText, expected) {
+			t.Fatalf("expected context to contain %q, got %s", expected, contextText)
+		}
+	}
+}
+
 func TestStartDocumentChunkUsesUploadedTextContent(t *testing.T) {
 	service := NewService(nil)
 	kbID, err := service.CreateKnowledgeBase(KnowledgeBaseCreateRequest{

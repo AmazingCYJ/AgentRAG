@@ -855,9 +855,12 @@ func (s *Service) BuildPromptContext(_ context.Context, query string, limit int)
 	}
 
 	type scoredChunk struct {
-		docName string
-		content string
-		score   int
+		kbName     string
+		docName    string
+		source     string
+		chunkIndex int
+		content    string
+		score      int
 	}
 
 	matches := make([]scoredChunk, 0)
@@ -873,10 +876,17 @@ func (s *Service) BuildPromptContext(_ context.Context, query string, limit int)
 		if score <= 0 {
 			continue
 		}
+		kbName := ""
+		if kb, ok := s.knowledgeBases[doc.KBID]; ok {
+			kbName = kb.Name
+		}
 		matches = append(matches, scoredChunk{
-			docName: doc.DocName,
-			content: chunk.Content,
-			score:   score,
+			kbName:     kbName,
+			docName:    doc.DocName,
+			source:     defaultText(doc.SourceLocation, defaultText(doc.FileURL, doc.DocName)),
+			chunkIndex: chunk.ChunkIndex,
+			content:    chunk.Content,
+			score:      score,
 		})
 	}
 
@@ -899,7 +909,15 @@ func (s *Service) BuildPromptContext(_ context.Context, query string, limit int)
 
 	parts := make([]string, 0, len(matches))
 	for index, item := range matches {
-		parts = append(parts, "["+strconv.Itoa(index+1)+"] 文档《"+item.docName+"》\n"+item.content)
+		// 给大模型保留来源信息，便于生成可追溯的回答。
+		lines := []string{
+			"[" + strconv.Itoa(index+1) + "] 知识库：" + defaultText(item.kbName, "未命名知识库"),
+			"文档：" + item.docName,
+			"来源：" + defaultText(item.source, item.docName),
+			"Chunk：" + strconv.Itoa(item.chunkIndex),
+			item.content,
+		}
+		parts = append(parts, strings.Join(lines, "\n"))
 	}
 	return strings.Join(parts, "\n\n"), nil
 }
