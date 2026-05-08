@@ -156,6 +156,40 @@ func TestBuildPromptContextIncludesSourceMetadata(t *testing.T) {
 	}
 }
 
+func TestBuildPromptContextMatchesBusinessSynonyms(t *testing.T) {
+	service := NewService(nil)
+	kbID, err := service.CreateKnowledgeBase(KnowledgeBaseCreateRequest{
+		Name:           "财务知识库",
+		EmbeddingModel: "embedding-openai-large",
+		CollectionName: "finance_docs",
+		CreatedBy:      "admin",
+	})
+	if err != nil {
+		t.Fatalf("create knowledge base failed: %v", err)
+	}
+	doc, err := service.UploadDocument(kbID, KnowledgeDocumentUploadRequest{
+		SourceType: "file",
+		FileName:   "报销制度.md",
+	}, "admin")
+	if err != nil {
+		t.Fatalf("upload document failed: %v", err)
+	}
+	_, err = service.CreateChunk(doc.ID, KnowledgeChunkCreateRequest{
+		Content: "报销流程需要准备发票、审批单和付款账号。",
+	})
+	if err != nil {
+		t.Fatalf("create chunk failed: %v", err)
+	}
+
+	contextText, err := service.BuildPromptContext(nil, "怎么报账", 1)
+	if err != nil {
+		t.Fatalf("build prompt context failed: %v", err)
+	}
+	if !strings.Contains(contextText, "报销流程需要准备发票") {
+		t.Fatalf("expected synonym query to retrieve reimbursement chunk, got %s", contextText)
+	}
+}
+
 func TestStartDocumentChunkUsesUploadedTextContent(t *testing.T) {
 	service := NewService(nil)
 	kbID, err := service.CreateKnowledgeBase(KnowledgeBaseCreateRequest{

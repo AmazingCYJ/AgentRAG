@@ -33,6 +33,19 @@ var (
 	ErrChunkContentRequired = errors.New("Chunk 内容不能为空")
 )
 
+var businessSynonyms = map[string][]string{
+	"报账":   {"报销"},
+	"报销":   {"报账"},
+	"付款账户": {"付款账号"},
+	"付款账号": {"付款账户"},
+	"账户":   {"账号"},
+	"账号":   {"账户"},
+	"休假":   {"请假"},
+	"请假":   {"休假"},
+	"审批人":  {"负责人"},
+	"负责人":  {"审批人"},
+}
+
 // PageResult 定义统一分页结构。
 type PageResult[T any] struct {
 	Records []T `json:"records"`
@@ -1383,15 +1396,17 @@ func tokenize(text string) []string {
 	for _, field := range fields {
 		field = strings.TrimSpace(field)
 		if field != "" {
-			result = append(result, field)
+			appendToken(&result, field)
 			appendNGrams(&result, []rune(field), 2)
 			appendNGrams(&result, []rune(field), 3)
+			appendBusinessSynonyms(&result, field)
 		}
 	}
 	if len(result) == 0 && normalized != "" {
-		result = append(result, normalized)
+		appendToken(&result, normalized)
 		appendNGrams(&result, []rune(normalized), 2)
 		appendNGrams(&result, []rune(normalized), 3)
+		appendBusinessSynonyms(&result, normalized)
 	}
 	return result
 }
@@ -1420,6 +1435,28 @@ func appendNGrams(target *[]string, runes []rune, size int) {
 	for i := 0; i <= len(runes)-size; i++ {
 		*target = append(*target, string(runes[i:i+size]))
 	}
+}
+
+func appendBusinessSynonyms(target *[]string, field string) {
+	for source, synonyms := range businessSynonyms {
+		if !strings.Contains(field, source) {
+			continue
+		}
+		for _, synonym := range synonyms {
+			// 本地同义词只做召回增强，不替换原始内容。
+			appendToken(target, synonym)
+			appendNGrams(target, []rune(synonym), 2)
+			appendNGrams(target, []rune(synonym), 3)
+		}
+	}
+}
+
+func appendToken(target *[]string, token string) {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return
+	}
+	*target = append(*target, token)
 }
 
 func (s *Service) persistLocked() error {
