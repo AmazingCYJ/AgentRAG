@@ -140,7 +140,7 @@ func TestStreamChatRecordsGeneratorWorkflowSteps(t *testing.T) {
 		t.Fatalf("list trace nodes failed: %v", err)
 	}
 	for _, node := range nodes {
-		if node.NodeID == "retrieve_context" && node.NodeType == "RETRIEVER" && node.ErrorMessage == "命中知识库" {
+		if node.NodeID == "retrieve_context" && node.NodeType == "RETRIEVER" && strings.Contains(node.ExtraData, "命中知识库") && node.ErrorMessage == "" {
 			return
 		}
 	}

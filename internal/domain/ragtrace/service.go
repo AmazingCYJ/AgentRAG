@@ -1,6 +1,7 @@
 package ragtrace
 
 import (
+	"encoding/json"
 	"errors"
 	"sort"
 	"strconv"
@@ -590,7 +591,8 @@ func buildChatNodes(traceID string, run Run, deepThinking bool, steps []ChatTrac
 		if strings.TrimSpace(nodeName) == "" {
 			nodeName = step.NodeType
 		}
-		nodes = append(nodes, makeNode(
+		nodeStatus := normalizeStatus(step.Status)
+		node := makeNode(
 			nodeID,
 			"node-entry",
 			1,
@@ -600,13 +602,35 @@ func buildChatNodes(traceID string, run Run, deepThinking bool, steps []ChatTrac
 			step.NodeID,
 			stepOffset,
 			duration,
-			defaultString(step.Status, "SUCCESS"),
-			step.Detail,
-		))
+			nodeStatus,
+			stepErrorMessage(step, nodeStatus),
+		)
+		node.ExtraData = stepExtraData(step.Detail)
+		nodes = append(nodes, node)
 		stepOffset += duration
 	}
 
 	return nodes
+}
+
+func stepErrorMessage(step ChatTraceStep, status string) string {
+	if normalizeStatus(status) == "SUCCESS" {
+		return ""
+	}
+	return strings.TrimSpace(step.Detail)
+}
+
+func stepExtraData(detail string) string {
+	detail = strings.TrimSpace(detail)
+	if detail == "" {
+		return ""
+	}
+	// Trace 扩展字段按 JSON 存储，便于前端后续结构化展示节点详情。
+	payload, err := json.Marshal(map[string]string{"detail": detail})
+	if err != nil {
+		return detail
+	}
+	return string(payload)
 }
 
 func maxInt64(a, b int64) int64 {
