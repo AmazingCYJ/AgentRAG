@@ -2,16 +2,21 @@ package httpx
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
 
 	domainconversation "github.com/AmazingCYJ/AgentRAG/internal/domain/conversation"
 	domainintenttree "github.com/AmazingCYJ/AgentRAG/internal/domain/intenttree"
+	domainknowledge "github.com/AmazingCYJ/AgentRAG/internal/domain/knowledge"
+	domainragtrace "github.com/AmazingCYJ/AgentRAG/internal/domain/ragtrace"
 	appconfig "github.com/AmazingCYJ/AgentRAG/internal/platform/config"
 	"github.com/gogf/gf/v2/net/ghttp"
 	"github.com/gogf/gf/v2/util/guid"
@@ -317,6 +322,105 @@ func TestChatRouteUsesMCPToolContextWhenIntentMatches(t *testing.T) {
 	}
 }
 
+func TestChatUsesUploadedKnowledgeDocumentAndRecordsRetrieverTrace(t *testing.T) {
+	conversationService := domainconversation.NewService(nil)
+	knowledgeService := domainknowledge.NewService(nil)
+	traceService := domainragtrace.NewService(nil)
+	server := newServerWithDeps(&appconfig.Config{
+		HTTP: appconfig.HTTPConfig{Port: 8080},
+		Auth: appconfig.AuthConfig{
+			JWTSecret: "test-secret",
+			TokenTTL:  time.Hour,
+			Bootstrap: appconfig.BootstrapUserConfig{
+				UserID:   "u_admin",
+				Username: "admin",
+				Password: "admin123",
+				Role:     "admin",
+			},
+		},
+	}, guid.S(), serverDeps{
+		conversationService: conversationService,
+		knowledgeService:    knowledgeService,
+		ragTraceService:     traceService,
+	})
+	server.SetAddr("127.0.0.1:0")
+	if err := server.Start(); err != nil {
+		t.Fatalf("start server failed: %v", err)
+	}
+	defer server.Shutdown()
+	time.Sleep(100 * time.Millisecond)
+
+	token := loginAndGetToken(t, server.GetListenedPort())
+	kbID := createKnowledgeBaseForChatTest(t, server.GetListenedPort(), token)
+	docID := uploadKnowledgeDocumentForChatTest(t, server.GetListenedPort(), token, kbID)
+	startKnowledgeDocumentChunkForChatTest(t, server.GetListenedPort(), token, docID)
+
+	request, err := http.NewRequest(
+		http.MethodGet,
+		fmt.Sprintf("http://127.0.0.1:%d/rag/v3/chat?question=%s", server.GetListenedPort(), url.QueryEscape("报销流程需要准备什么材料")),
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("create chat request failed: %v", err)
+	}
+	request.Header.Set("Authorization", token)
+
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("request chat stream failed: %v", err)
+	}
+	defer response.Body.Close()
+
+	events := readSSEEventsUntilDone(t, response.Body)
+	var meta struct {
+		TaskID string `json:"taskId"`
+	}
+	var answer strings.Builder
+	for _, event := range events {
+		switch event.Name {
+		case "meta":
+			if err := json.Unmarshal(event.Data, &meta); err != nil {
+				t.Fatalf("decode meta failed: %v", err)
+			}
+		case "message":
+			var payload struct {
+				Type  string `json:"type"`
+				Delta string `json:"delta"`
+			}
+			if err := json.Unmarshal(event.Data, &payload); err != nil {
+				t.Fatalf("decode message failed: %v", err)
+			}
+			if payload.Type == "response" {
+				answer.WriteString(payload.Delta)
+			}
+		}
+	}
+	if meta.TaskID == "" {
+		t.Fatal("expected chat task id")
+	}
+	answerText := answer.String()
+	for _, expected := range []string{"发票", "报销制度.md", "知识库：财务知识库", "Chunk：0"} {
+		if !strings.Contains(answerText, expected) {
+			t.Fatalf("expected answer to contain %q, got %s", expected, answerText)
+		}
+	}
+
+	runs := traceService.PageRuns(domainragtrace.RunQuery{TaskID: meta.TaskID, Size: 10})
+	if runs.Total == 0 || len(runs.Records) == 0 {
+		t.Fatal("expected trace run for knowledge chat")
+	}
+	nodes, err := traceService.ListNodes(runs.Records[0].TraceID)
+	if err != nil {
+		t.Fatalf("list trace nodes failed: %v", err)
+	}
+	for _, node := range nodes {
+		if node.NodeType == "RETRIEVER" {
+			return
+		}
+	}
+	t.Fatalf("expected retriever node in trace, got %#v", nodes)
+}
+
 func startChatTestServer(t *testing.T, conversationService *domainconversation.Service) *ghttp.Server {
 	t.Helper()
 
@@ -341,6 +445,109 @@ func startChatTestServer(t *testing.T, conversationService *domainconversation.S
 	}
 	time.Sleep(100 * time.Millisecond)
 	return server
+}
+
+func createKnowledgeBaseForChatTest(t *testing.T, port int, token string) string {
+	t.Helper()
+
+	body := strings.NewReader(`{"name":"财务知识库","embeddingModel":"embedding-openai-large","collectionName":"fin_docs"}`)
+	request, err := http.NewRequest(http.MethodPost, fmt.Sprintf("http://127.0.0.1:%d/knowledge-base", port), body)
+	if err != nil {
+		t.Fatalf("create knowledge base request failed: %v", err)
+	}
+	request.Header.Set("Authorization", token)
+	request.Header.Set("Content-Type", "application/json")
+
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("request create knowledge base failed: %v", err)
+	}
+	defer response.Body.Close()
+
+	var responseBody struct {
+		Code string `json:"code"`
+		Data string `json:"data"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&responseBody); err != nil {
+		t.Fatalf("decode create knowledge base response failed: %v", err)
+	}
+	if responseBody.Code != "0" || responseBody.Data == "" {
+		t.Fatalf("expected created knowledge base id, got code=%s data=%s", responseBody.Code, responseBody.Data)
+	}
+	return responseBody.Data
+}
+
+func uploadKnowledgeDocumentForChatTest(t *testing.T, port int, token, kbID string) string {
+	t.Helper()
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	_ = writer.WriteField("sourceType", "file")
+	_ = writer.WriteField("processMode", "chunk")
+	_ = writer.WriteField("chunkStrategy", "structure_aware")
+	fileWriter, err := writer.CreateFormFile("file", "报销制度.md")
+	if err != nil {
+		t.Fatalf("create multipart file failed: %v", err)
+	}
+	if _, err := fileWriter.Write([]byte("报销流程需要准备发票、审批单和付款账号。")); err != nil {
+		t.Fatalf("write multipart file failed: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close multipart writer failed: %v", err)
+	}
+
+	request, err := http.NewRequest(http.MethodPost, fmt.Sprintf("http://127.0.0.1:%d/knowledge-base/%s/docs/upload", port, kbID), &body)
+	if err != nil {
+		t.Fatalf("create upload request failed: %v", err)
+	}
+	request.Header.Set("Authorization", token)
+	request.Header.Set("Content-Type", writer.FormDataContentType())
+
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("request upload document failed: %v", err)
+	}
+	defer response.Body.Close()
+
+	var responseBody struct {
+		Code string `json:"code"`
+		Data struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&responseBody); err != nil {
+		t.Fatalf("decode upload document response failed: %v", err)
+	}
+	if responseBody.Code != "0" || responseBody.Data.ID == "" {
+		t.Fatalf("expected uploaded document id, got code=%s id=%s", responseBody.Code, responseBody.Data.ID)
+	}
+	return responseBody.Data.ID
+}
+
+func startKnowledgeDocumentChunkForChatTest(t *testing.T, port int, token, docID string) {
+	t.Helper()
+
+	request, err := http.NewRequest(http.MethodPost, fmt.Sprintf("http://127.0.0.1:%d/knowledge-base/docs/%s/chunk", port, docID), nil)
+	if err != nil {
+		t.Fatalf("create start chunk request failed: %v", err)
+	}
+	request.Header.Set("Authorization", token)
+
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("request start chunk failed: %v", err)
+	}
+	defer response.Body.Close()
+
+	var responseBody struct {
+		Code string `json:"code"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&responseBody); err != nil {
+		t.Fatalf("decode start chunk response failed: %v", err)
+	}
+	if responseBody.Code != "0" {
+		t.Fatalf("expected start chunk code 0, got %s", responseBody.Code)
+	}
 }
 
 func readSSEEventsUntilDone(t *testing.T, body io.Reader) []sseEvent {
