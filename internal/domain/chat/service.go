@@ -138,7 +138,7 @@ func (s *Service) StreamChat(ctx context.Context, req StreamRequest, writer Even
 	}
 
 	if err := s.waitFn(taskCtx, prepareDelay); err != nil {
-		return s.finishCanceled(writer, req, conversationID, taskID, title, "", "", startedAt)
+		return s.finishCanceled(writer, req, conversationID, taskID, title, "", "", startedAt, nil)
 	}
 
 	generated, err := s.generator.Generate(taskCtx, GenerateRequest{
@@ -153,7 +153,7 @@ func (s *Service) StreamChat(ctx context.Context, req StreamRequest, writer Even
 	if req.DeepThinking && thinkingContent != "" {
 		for _, chunk := range splitText(thinkingContent, thinkingChunkSize) {
 			if err := s.waitFn(taskCtx, chunkDelay); err != nil {
-				return s.finishCanceled(writer, req, conversationID, taskID, title, "", thinkingContent, startedAt)
+				return s.finishCanceled(writer, req, conversationID, taskID, title, "", thinkingContent, startedAt, generated.Steps)
 			}
 			if err := writer.Event("message", streamMessage{
 				Type:  "think",
@@ -167,7 +167,7 @@ func (s *Service) StreamChat(ctx context.Context, req StreamRequest, writer Even
 	responseContent := ""
 	for _, chunk := range splitText(generated.Answer, responseChunkSize) {
 		if err := s.waitFn(taskCtx, chunkDelay); err != nil {
-			return s.finishCanceled(writer, req, conversationID, taskID, title, responseContent, thinkingContent, startedAt)
+			return s.finishCanceled(writer, req, conversationID, taskID, title, responseContent, thinkingContent, startedAt, generated.Steps)
 		}
 		if err := writer.Event("message", streamMessage{
 			Type:  "response",
@@ -179,7 +179,7 @@ func (s *Service) StreamChat(ctx context.Context, req StreamRequest, writer Even
 	}
 
 	messageID := s.persistAssistantMessage(req.UserID, conversationID, title, responseContent, thinkingContent, startedAt)
-	s.recordTrace(req, conversationID, taskID, "success", "", startedAt, s.now())
+	s.recordTrace(req, conversationID, taskID, "success", "", startedAt, s.now(), generated.Steps)
 	if err := writer.Event("finish", streamCompletion{
 		MessageID: messageID,
 		Title:     title,
@@ -204,9 +204,10 @@ func (s *Service) finishCanceled(
 	req StreamRequest,
 	conversationID, taskID, title, responseContent, thinkingContent string,
 	startedAt time.Time,
+	steps []WorkflowStep,
 ) error {
 	messageID := s.persistAssistantMessage(req.UserID, conversationID, title, responseContent, thinkingContent, startedAt)
-	s.recordTrace(req, conversationID, taskID, "failed", "用户停止生成", startedAt, s.now())
+	s.recordTrace(req, conversationID, taskID, "failed", "用户停止生成", startedAt, s.now(), steps)
 	if err := writer.Event("cancel", streamCompletion{
 		MessageID: messageID,
 		Title:     title,
@@ -255,6 +256,7 @@ func (s *Service) recordTrace(
 	req StreamRequest,
 	conversationID, taskID, status, errorMessage string,
 	startedAt, endedAt time.Time,
+	steps []WorkflowStep,
 ) {
 	if s.traceService == nil {
 		return
@@ -271,7 +273,26 @@ func (s *Service) recordTrace(
 		StartTime:      startedAt,
 		EndTime:        endedAt,
 		DeepThinking:   req.DeepThinking,
+		Steps:          toTraceSteps(steps),
 	})
+}
+
+func toTraceSteps(steps []WorkflowStep) []domainragtrace.ChatTraceStep {
+	if len(steps) == 0 {
+		return nil
+	}
+	result := make([]domainragtrace.ChatTraceStep, 0, len(steps))
+	for _, step := range steps {
+		result = append(result, domainragtrace.ChatTraceStep{
+			NodeID:     step.NodeID,
+			NodeType:   step.NodeType,
+			NodeName:   step.NodeName,
+			Status:     strings.ToUpper(strings.TrimSpace(step.Status)),
+			DurationMs: step.DurationMs,
+			Detail:     step.Detail,
+		})
+	}
+	return result
 }
 
 func (s *Service) registerTask(taskID string, cancel context.CancelFunc) {

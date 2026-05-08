@@ -7,6 +7,7 @@ import (
 	"time"
 
 	domainconversation "github.com/AmazingCYJ/AgentRAG/internal/domain/conversation"
+	domainragtrace "github.com/AmazingCYJ/AgentRAG/internal/domain/ragtrace"
 	appconfig "github.com/AmazingCYJ/AgentRAG/internal/platform/config"
 )
 
@@ -23,6 +24,12 @@ type fakeGenerator struct {
 	thinking string
 	answer   string
 	lastReq  GenerateRequest
+}
+
+type GeneratorFunc func(context.Context, GenerateRequest) (GenerateResult, error)
+
+func (f GeneratorFunc) Generate(ctx context.Context, req GenerateRequest) (GenerateResult, error) {
+	return f(ctx, req)
 }
 
 func (g *fakeGenerator) Generate(_ context.Context, _ GenerateRequest) (GenerateResult, error) {
@@ -76,6 +83,68 @@ func TestStreamChatUsesConfiguredGeneratorOutput(t *testing.T) {
 	if messages[1].Content != "这是生成器回答内容" {
 		t.Fatalf("expected generator answer content, got %s", messages[1].Content)
 	}
+}
+
+func TestStreamChatRecordsGeneratorWorkflowSteps(t *testing.T) {
+	conversationService := domainconversation.NewService(nil)
+	traceService := domainragtrace.NewService(nil)
+	service := NewService(
+		conversationService,
+		traceService,
+		&fakeGenerator{
+			answer: "工作流回答",
+		},
+	)
+	service.generator = GeneratorFunc(func(_ context.Context, _ GenerateRequest) (GenerateResult, error) {
+		return GenerateResult{
+			Answer: "工作流回答",
+			Steps: []WorkflowStep{
+				{
+					NodeID:     "retrieve_context",
+					NodeType:   "RETRIEVER",
+					NodeName:   "Retrieve Knowledge",
+					Status:     "success",
+					DurationMs: 12,
+					Detail:     "命中知识库",
+				},
+			},
+		}, nil
+	})
+	service.waitFn = func(_ context.Context, _ time.Duration) error { return nil }
+	service.now = func() time.Time {
+		return time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC)
+	}
+
+	err := service.StreamChat(context.Background(), StreamRequest{
+		UserID:   "u_admin",
+		Username: "admin",
+		Question: "测试工作流步骤",
+	}, &fakeWriter{})
+	if err != nil {
+		t.Fatalf("stream chat failed: %v", err)
+	}
+
+	runs := traceService.PageRuns(domainragtrace.RunQuery{Size: 10})
+	var traceID string
+	for _, run := range runs.Records {
+		if run.TraceName == "测试工作流步骤" {
+			traceID = run.TraceID
+			break
+		}
+	}
+	if traceID == "" {
+		t.Fatal("expected trace run for chat")
+	}
+	nodes, err := traceService.ListNodes(traceID)
+	if err != nil {
+		t.Fatalf("list trace nodes failed: %v", err)
+	}
+	for _, node := range nodes {
+		if node.NodeID == "retrieve_context" && node.NodeType == "RETRIEVER" && node.ErrorMessage == "命中知识库" {
+			return
+		}
+	}
+	t.Fatalf("expected retriever workflow node in trace, got %#v", nodes)
 }
 
 type captureGenerator struct {
