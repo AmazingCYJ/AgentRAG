@@ -107,6 +107,7 @@ func (s *Service) StreamChat(ctx context.Context, req StreamRequest, writer Even
 	if conversationID == "" {
 		conversationID = conversationIDPrefix + compactID(s.newID())
 	}
+	history := s.recentHistory(conversationID, req.UserID, 6)
 	taskID := compactID(s.newID())
 	title := buildConversationTitle(question)
 	startedAt := s.now()
@@ -144,6 +145,7 @@ func (s *Service) StreamChat(ctx context.Context, req StreamRequest, writer Even
 	generated, err := s.generator.Generate(taskCtx, GenerateRequest{
 		Question:     question,
 		DeepThinking: req.DeepThinking,
+		History:      history,
 	})
 	if err != nil {
 		return err
@@ -187,6 +189,36 @@ func (s *Service) StreamChat(ctx context.Context, req StreamRequest, writer Even
 		return err
 	}
 	return writer.Event("done", struct{}{})
+}
+
+func (s *Service) recentHistory(conversationID, userID string, limit int) []HistoryMessage {
+	if s.conversationService == nil {
+		return nil
+	}
+	messages := s.conversationService.ListMessages(conversationID, userID)
+	if len(messages) == 0 {
+		return nil
+	}
+	if limit <= 0 {
+		limit = 6
+	}
+	if len(messages) > limit {
+		messages = messages[len(messages)-limit:]
+	}
+
+	history := make([]HistoryMessage, 0, len(messages))
+	for _, message := range messages {
+		role := strings.ToLower(strings.TrimSpace(message.Role))
+		content := strings.TrimSpace(message.Content)
+		if content == "" || (role != "user" && role != "assistant") {
+			continue
+		}
+		history = append(history, HistoryMessage{
+			Role:    role,
+			Content: content,
+		})
+	}
+	return history
 }
 
 // StopTask 取消指定流式任务，未知任务按幂等成功处理。
@@ -338,15 +370,41 @@ func buildThinkingText(question string) string {
 	return "正在分析你的问题并整理与“" + question + "”相关的上下文。"
 }
 
-func buildResponseText(question string, deepThinking bool, knowledgeContext string) string {
+func buildResponseText(question string, deepThinking bool, knowledgeContext string, history []HistoryMessage) string {
 	contextText := strings.TrimSpace(knowledgeContext)
 	if contextText != "" {
 		return "根据当前可用上下文，关于“" + question + "”的回答如下：\n\n" + compactContextAnswer(contextText)
+	}
+	historyText := compactHistoryAnswer(history)
+	if historyText != "" {
+		return "结合上一轮对话，关于“" + question + "”的回答如下：\n\n" + historyText
 	}
 	if deepThinking {
 		return "我已经收到你的问题：“" + question + "”。当前未配置可用模型，也没有检索到可引用上下文，因此只能返回本地兜底说明。"
 	}
 	return "我已经收到你的问题：“" + question + "”。当前未配置可用模型，也没有检索到可引用上下文。"
+}
+
+func compactHistoryAnswer(history []HistoryMessage) string {
+	if len(history) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(history))
+	for _, message := range history {
+		content := strings.TrimSpace(message.Content)
+		if content == "" {
+			continue
+		}
+		role := "用户"
+		if strings.EqualFold(message.Role, "assistant") {
+			role = "助手"
+		}
+		parts = append(parts, role+"："+content)
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return compactContextAnswer(strings.Join(parts, "\n"))
 }
 
 func compactContextAnswer(contextText string) string {

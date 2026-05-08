@@ -16,6 +16,7 @@ type GenerateRequest struct {
 	DeepThinking     bool
 	KnowledgeContext string
 	RewriteQuestion  string
+	History          []HistoryMessage
 }
 
 // GenerateResult 定义聊天生成输出。
@@ -23,6 +24,12 @@ type GenerateResult struct {
 	Thinking string
 	Answer   string
 	Steps    []WorkflowStep
+}
+
+// HistoryMessage 表示注入模型的历史对话消息。
+type HistoryMessage struct {
+	Role    string
+	Content string
 }
 
 // WorkflowStep 定义聊天 workflow 的单个阶段。
@@ -108,7 +115,7 @@ func (g *fallbackGenerator) Generate(_ context.Context, req GenerateRequest) (Ge
 	}
 	return GenerateResult{
 		Thinking: thinking,
-		Answer:   buildResponseText(req.Question, req.DeepThinking, req.KnowledgeContext),
+		Answer:   buildResponseText(req.Question, req.DeepThinking, req.KnowledgeContext, req.History),
 		Steps: []WorkflowStep{
 			{
 				NodeID:     "fallback_generate",
@@ -202,6 +209,7 @@ func (g *EinoGenerator) Generate(ctx context.Context, req GenerateRequest) (Gene
 			g.knowledgePrompt+"\n\n"+req.KnowledgeContext,
 		))
 	}
+	messages = append(messages, toEinoHistoryMessages(req.History)...)
 	messages = append(messages, schema.UserMessage(strings.TrimSpace(req.Question)))
 	resp, err := model.Generate(ctx, messages)
 	if err != nil {
@@ -220,6 +228,26 @@ func (g *EinoGenerator) Generate(ctx context.Context, req GenerateRequest) (Gene
 			},
 		},
 	}, nil
+}
+
+func toEinoHistoryMessages(history []HistoryMessage) []*schema.Message {
+	if len(history) == 0 {
+		return nil
+	}
+	messages := make([]*schema.Message, 0, len(history))
+	for _, item := range history {
+		content := strings.TrimSpace(item.Content)
+		if content == "" {
+			continue
+		}
+		switch strings.ToLower(strings.TrimSpace(item.Role)) {
+		case "assistant":
+			messages = append(messages, schema.AssistantMessage(content, nil))
+		case "user":
+			messages = append(messages, schema.UserMessage(content))
+		}
+	}
+	return messages
 }
 
 func defaultSystemPrompt(prompt string) string {

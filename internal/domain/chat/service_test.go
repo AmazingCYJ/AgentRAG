@@ -147,6 +147,57 @@ func TestStreamChatRecordsGeneratorWorkflowSteps(t *testing.T) {
 	t.Fatalf("expected retriever workflow node in trace, got %#v", nodes)
 }
 
+func TestStreamChatPassesRecentConversationHistoryToGenerator(t *testing.T) {
+	conversationService := domainconversation.NewService(nil)
+	conversationID := "conv_memory"
+	now := time.Date(2026, 5, 7, 11, 0, 0, 0, time.UTC)
+	conversationService.UpsertConversation(domainconversation.Session{
+		ConversationID: conversationID,
+		UserID:         "u_admin",
+		Title:          "报销咨询",
+		LastTime:       now,
+	})
+	conversationService.AppendMessage(domainconversation.Message{
+		ID:             "msg_user_1",
+		ConversationID: conversationID,
+		UserID:         "u_admin",
+		Role:           "user",
+		Content:        "报销流程需要准备什么材料？",
+		CreateTime:     now,
+	})
+	conversationService.AppendMessage(domainconversation.Message{
+		ID:             "msg_assistant_1",
+		ConversationID: conversationID,
+		UserID:         "u_admin",
+		Role:           "assistant",
+		Content:        "需要准备发票和审批单。",
+		CreateTime:     now.Add(time.Minute),
+	})
+	base := &captureGenerator{}
+	service := NewService(conversationService, nil, base)
+	service.waitFn = func(_ context.Context, _ time.Duration) error { return nil }
+
+	err := service.StreamChat(context.Background(), StreamRequest{
+		UserID:         "u_admin",
+		Username:       "admin",
+		Question:       "它还需要账号吗？",
+		ConversationID: conversationID,
+	}, &fakeWriter{})
+	if err != nil {
+		t.Fatalf("stream chat failed: %v", err)
+	}
+
+	if len(base.lastReq.History) != 2 {
+		t.Fatalf("expected two history messages, got %#v", base.lastReq.History)
+	}
+	if base.lastReq.History[0] != (HistoryMessage{Role: "user", Content: "报销流程需要准备什么材料？"}) {
+		t.Fatalf("unexpected first history message %#v", base.lastReq.History[0])
+	}
+	if base.lastReq.History[1] != (HistoryMessage{Role: "assistant", Content: "需要准备发票和审批单。"}) {
+		t.Fatalf("unexpected second history message %#v", base.lastReq.History[1])
+	}
+}
+
 type captureGenerator struct {
 	lastReq GenerateRequest
 }
@@ -203,6 +254,24 @@ func TestFallbackGeneratorUsesKnowledgeContextWhenModelUnavailable(t *testing.T)
 	}
 	if strings.Contains(result.Answer, "占位答案") || strings.Contains(result.Answer, "最小可用回答") {
 		t.Fatalf("fallback should not return placeholder text when context exists, got %s", result.Answer)
+	}
+}
+
+func TestFallbackGeneratorUsesHistoryWhenModelUnavailable(t *testing.T) {
+	generator := &fallbackGenerator{}
+
+	result, err := generator.Generate(context.Background(), GenerateRequest{
+		Question: "它还需要账号吗？",
+		History: []HistoryMessage{
+			{Role: "user", Content: "报销流程需要准备什么材料？"},
+			{Role: "assistant", Content: "需要准备发票和审批单。"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("fallback generate failed: %v", err)
+	}
+	if !strings.Contains(result.Answer, "上一轮对话") || !strings.Contains(result.Answer, "发票和审批单") {
+		t.Fatalf("expected fallback answer to use history, got %s", result.Answer)
 	}
 }
 
