@@ -198,6 +198,44 @@ func TestStreamChatPassesRecentConversationHistoryToGenerator(t *testing.T) {
 	}
 }
 
+func TestStreamChatLimitsRecentConversationHistory(t *testing.T) {
+	conversationService := domainconversation.NewService(nil)
+	conversationID := "conv_history_limit"
+	now := time.Date(2026, 5, 7, 11, 0, 0, 0, time.UTC)
+	conversationService.UpsertConversation(domainconversation.Session{
+		ConversationID: conversationID,
+		UserID:         "u_admin",
+		Title:          "历史窗口",
+		LastTime:       now,
+	})
+	for index := 1; index <= 14; index++ {
+		conversationService.AppendMessage(domainconversation.Message{
+			ID:             "msg_history_" + string(rune('a'+index)),
+			ConversationID: conversationID,
+			UserID:         "u_admin",
+			Role:           "user",
+			Content:        "历史消息",
+			CreateTime:     now.Add(time.Duration(index) * time.Minute),
+		})
+	}
+	base := &captureGenerator{}
+	service := NewService(conversationService, nil, base)
+	service.waitFn = func(_ context.Context, _ time.Duration) error { return nil }
+
+	err := service.StreamChat(context.Background(), StreamRequest{
+		UserID:         "u_admin",
+		Username:       "admin",
+		Question:       "继续",
+		ConversationID: conversationID,
+	}, &fakeWriter{})
+	if err != nil {
+		t.Fatalf("stream chat failed: %v", err)
+	}
+	if len(base.lastReq.History) != 12 {
+		t.Fatalf("expected history limited to 12 messages, got %d", len(base.lastReq.History))
+	}
+}
+
 type captureGenerator struct {
 	lastReq GenerateRequest
 }

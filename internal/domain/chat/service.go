@@ -21,6 +21,7 @@ const (
 	defaultSessionTitle  = "新对话"
 	thinkingChunkSize    = 10
 	responseChunkSize    = 18
+	historyMessageLimit  = 12
 	prepareDelay         = 40 * time.Millisecond
 	chunkDelay           = 20 * time.Millisecond
 	conversationIDPrefix = "conv_"
@@ -107,7 +108,7 @@ func (s *Service) StreamChat(ctx context.Context, req StreamRequest, writer Even
 	if conversationID == "" {
 		conversationID = conversationIDPrefix + compactID(s.newID())
 	}
-	history := s.recentHistory(conversationID, req.UserID, 6)
+	history := s.recentHistory(conversationID, req.UserID, historyMessageLimit)
 	taskID := compactID(s.newID())
 	title := buildConversationTitle(question)
 	startedAt := s.now()
