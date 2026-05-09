@@ -36,6 +36,8 @@ func TestIntentTreeCRUDAndBatchActions(t *testing.T) {
 
 	token := loginAndGetToken(t, server.GetListenedPort())
 
+	assertIntentNodeInvalidTopKForTest(t, server.GetListenedPort(), token)
+
 	rootID := createIntentNodeForTest(t, server.GetListenedPort(), token, map[string]any{
 		"intentCode":     "biz_oa",
 		"name":           "OA系统",
@@ -79,6 +81,7 @@ func TestIntentTreeCRUDAndBatchActions(t *testing.T) {
 		"level":         1,
 		"parentCode":    "biz_oa",
 		"kind":          2,
+		"topK":          4,
 		"enabled":       1,
 		"sortOrder":     30,
 		"mcpToolId":     "leave-tool-v2",
@@ -117,6 +120,18 @@ func TestIntentTreeCRUDAndBatchActions(t *testing.T) {
 	if postUpdateTree[0].Children[0].Name != "请假审批" {
 		t.Fatalf("expected updated child name 请假审批, got %s", postUpdateTree[0].Children[0].Name)
 	}
+	if postUpdateTree[0].Children[0].TopK == nil || *postUpdateTree[0].Children[0].TopK != 4 {
+		t.Fatalf("expected updated child topK 4, got %#v", postUpdateTree[0].Children[0].TopK)
+	}
+
+	assertIntentNodeInvalidUpdateTopKForTest(t, server.GetListenedPort(), token, childID)
+	afterInvalidUpdateTree := getIntentTreeForTest(t, server.GetListenedPort(), token)
+	if afterInvalidUpdateTree[0].Children[0].Name != "请假审批" {
+		t.Fatalf("expected child name unchanged after invalid topK, got %s", afterInvalidUpdateTree[0].Children[0].Name)
+	}
+	if afterInvalidUpdateTree[0].Children[0].TopK == nil || *afterInvalidUpdateTree[0].Children[0].TopK != 4 {
+		t.Fatalf("expected child topK unchanged after invalid update, got %#v", afterInvalidUpdateTree[0].Children[0].TopK)
+	}
 
 	runIntentBatchForTest(t, server.GetListenedPort(), token, "/intent-tree/batch/disable", []string{rootID, childID})
 	disabledTree := getIntentTreeForTest(t, server.GetListenedPort(), token)
@@ -153,6 +168,91 @@ type intentTreeNodeForTest struct {
 	PromptTemplate      string                  `json:"promptTemplate"`
 	ParamPromptTemplate string                  `json:"paramPromptTemplate"`
 	Children            []intentTreeNodeForTest `json:"children"`
+}
+
+func assertIntentNodeInvalidTopKForTest(t *testing.T, port int, token string) {
+	t.Helper()
+
+	payload, _ := json.Marshal(map[string]any{
+		"intentCode": "invalid_topk",
+		"name":       "无效召回",
+		"level":      0,
+		"topK":       0,
+		"enabled":    1,
+	})
+	request, err := http.NewRequest(
+		http.MethodPost,
+		fmt.Sprintf("http://127.0.0.1:%d/intent-tree", port),
+		bytes.NewReader(payload),
+	)
+	if err != nil {
+		t.Fatalf("create invalid topK request failed: %v", err)
+	}
+	request.Header.Set("Authorization", token)
+	request.Header.Set("Content-Type", "application/json")
+
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("request invalid topK failed: %v", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected invalid topK status 400, got %d", response.StatusCode)
+	}
+
+	var body struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatalf("decode invalid topK response failed: %v", err)
+	}
+	if body.Code != "400" || body.Message != "召回数量必须大于 0" {
+		t.Fatalf("unexpected invalid topK response %#v", body)
+	}
+}
+
+func assertIntentNodeInvalidUpdateTopKForTest(t *testing.T, port int, token, nodeID string) {
+	t.Helper()
+
+	payload, _ := json.Marshal(map[string]any{
+		"name":       "无效更新",
+		"level":      1,
+		"parentCode": "biz_oa",
+		"topK":       0,
+		"kind":       2,
+		"enabled":    1,
+	})
+	request, err := http.NewRequest(
+		http.MethodPut,
+		fmt.Sprintf("http://127.0.0.1:%d/intent-tree/%s", port, nodeID),
+		bytes.NewReader(payload),
+	)
+	if err != nil {
+		t.Fatalf("create invalid topK update request failed: %v", err)
+	}
+	request.Header.Set("Authorization", token)
+	request.Header.Set("Content-Type", "application/json")
+
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("request invalid topK update failed: %v", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected invalid update topK status 400, got %d", response.StatusCode)
+	}
+
+	var body struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatalf("decode invalid update topK response failed: %v", err)
+	}
+	if body.Code != "400" || body.Message != "召回数量必须大于 0" {
+		t.Fatalf("unexpected invalid update topK response %#v", body)
+	}
 }
 
 func TestIntentTreePersistsThroughConfiguredDatabase(t *testing.T) {

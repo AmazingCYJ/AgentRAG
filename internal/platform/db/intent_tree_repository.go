@@ -142,7 +142,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`)
 			normalizeTime(node.CreateTime), normalizeTime(node.UpdateTime),
 		); err != nil {
 			_ = tx.Rollback()
-						return err
+			return err
 		}
 	}
 	return tx.Commit()

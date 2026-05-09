@@ -191,7 +191,8 @@ func writeIntentTreeError(r *ghttp.Request, err error) {
 	case errors.Is(err, domainintenttree.ErrIntentCodeRequired),
 		errors.Is(err, domainintenttree.ErrIntentNameRequired),
 		errors.Is(err, domainintenttree.ErrIntentCodeExists),
-		errors.Is(err, domainintenttree.ErrParentNotFound):
+		errors.Is(err, domainintenttree.ErrParentNotFound),
+		errors.Is(err, domainintenttree.ErrTopKInvalid):
 		resp.WriteError(r, http.StatusBadRequest, "400", err.Error())
 	case errors.Is(err, domainintenttree.ErrNodeNotFound):
 		resp.WriteError(r, http.StatusNotFound, "404", err.Error())

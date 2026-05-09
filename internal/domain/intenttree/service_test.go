@@ -1,6 +1,7 @@
 package intenttree
 
 import (
+	"errors"
 	"path/filepath"
 	"testing"
 
@@ -46,5 +47,43 @@ func TestIntentTreePersistsAcrossServiceRecreation(t *testing.T) {
 	}
 	if len(tree[0].Children) != 1 {
 		t.Fatalf("expected 1 child node, got %d", len(tree[0].Children))
+	}
+}
+
+func TestIntentTreeRejectsInvalidTopK(t *testing.T) {
+	service := NewService(nil)
+
+	zero := 0
+	if _, err := service.CreateNode(CreateRequest{
+		IntentCode: "invalid_topk",
+		Name:       "无效召回",
+		Level:      0,
+		TopK:       &zero,
+		Enabled:    1,
+	}); !errors.Is(err, ErrTopKInvalid) {
+		t.Fatalf("expected ErrTopKInvalid on create, got %v", err)
+	}
+
+	valid := 3
+	nodeID, err := service.CreateNode(CreateRequest{
+		IntentCode: "valid_topk",
+		Name:       "有效召回",
+		Level:      0,
+		TopK:       &valid,
+		Enabled:    1,
+	})
+	if err != nil {
+		t.Fatalf("create valid topK node failed: %v", err)
+	}
+
+	negative := -1
+	err = service.UpdateNode(nodeID, UpdateRequest{
+		Name:    "无效更新",
+		Level:   0,
+		TopK:    &negative,
+		Enabled: 1,
+	})
+	if !errors.Is(err, ErrTopKInvalid) {
+		t.Fatalf("expected ErrTopKInvalid on update, got %v", err)
 	}
 }

@@ -18,6 +18,7 @@ var (
 	ErrIntentNameRequired = errors.New("节点名称不能为空")
 	ErrIntentCodeExists   = errors.New("意图标识已存在")
 	ErrParentNotFound     = errors.New("父节点不存在")
+	ErrTopKInvalid        = errors.New("召回数量必须大于 0")
 )
 
 // Node 表示内部意图节点。
@@ -283,6 +284,9 @@ func (s *Service) CreateNode(req CreateRequest) (string, error) {
 	if name == "" {
 		return "", ErrIntentNameRequired
 	}
+	if err := validateTopK(req.TopK); err != nil {
+		return "", err
+	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -330,6 +334,9 @@ func (s *Service) UpdateNode(id string, req UpdateRequest) error {
 	name := strings.TrimSpace(req.Name)
 	if name == "" {
 		return ErrIntentNameRequired
+	}
+	if err := validateTopK(req.TopK); err != nil {
+		return err
 	}
 
 	s.mu.Lock()
@@ -544,6 +551,13 @@ func cloneIntPointer(value *int) *int {
 	}
 	v := *value
 	return &v
+}
+
+func validateTopK(value *int) error {
+	if value != nil && *value <= 0 {
+		return ErrTopKInvalid
+	}
+	return nil
 }
 
 func buildIntentTokens(text string) []string {
