@@ -691,6 +691,70 @@ func TestKnowledgeDocumentAndChunkLifecycle(t *testing.T) {
 	}
 }
 
+func TestKnowledgeDocumentSearchMatchesBusinessSynonyms(t *testing.T) {
+	server := newServer(&appconfig.Config{
+		HTTP: appconfig.HTTPConfig{Port: 8080},
+		Auth: appconfig.AuthConfig{
+			JWTSecret: "test-secret",
+			TokenTTL:  time.Hour,
+			Bootstrap: appconfig.BootstrapUserConfig{
+				UserID:   "u_admin",
+				Username: "admin",
+				Password: "admin123",
+				Role:     "admin",
+			},
+		},
+	}, guid.S())
+	server.SetAddr("127.0.0.1:0")
+	if err := server.Start(); err != nil {
+		t.Fatalf("start server failed: %v", err)
+	}
+	defer server.Shutdown()
+	time.Sleep(100 * time.Millisecond)
+
+	token := loginAndGetToken(t, server.GetListenedPort())
+	kbID := createKnowledgeBaseForTest(t, server.GetListenedPort(), token, map[string]any{
+		"name":           "财务文档库",
+		"embeddingModel": "embedding-openai-large",
+		"collectionName": "finance_docs",
+	})
+	docID := uploadNamedKnowledgeDocumentForTest(t, server.GetListenedPort(), token, kbID, "报销制度.md", "报销流程需要准备发票。")
+
+	request, err := http.NewRequest(
+		http.MethodGet,
+		fmt.Sprintf("http://127.0.0.1:%d/knowledge-base/docs/search?keyword=%s&limit=6", server.GetListenedPort(), "报账"),
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("create doc search request failed: %v", err)
+	}
+	request.Header.Set("Authorization", token)
+
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("request doc search failed: %v", err)
+	}
+	defer response.Body.Close()
+
+	var body struct {
+		Code string `json:"code"`
+		Data []struct {
+			ID      string `json:"id"`
+			DocName string `json:"docName"`
+			KBName  string `json:"kbName"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatalf("decode doc search failed: %v", err)
+	}
+	if body.Code != "0" || len(body.Data) != 1 {
+		t.Fatalf("expected one synonym search result, got code=%s data=%#v", body.Code, body.Data)
+	}
+	if body.Data[0].ID != docID || body.Data[0].DocName != "报销制度.md" || body.Data[0].KBName != "财务文档库" {
+		t.Fatalf("unexpected synonym search result %#v", body.Data[0])
+	}
+}
+
 func TestKnowledgeDataPersistsThroughConfiguredDatabase(t *testing.T) {
 	dsn := filepath.Join(t.TempDir(), "agentrag.db")
 	cfg := &appconfig.Config{
@@ -828,17 +892,23 @@ func createKnowledgeBaseForTest(t *testing.T, port int, token string, payload ma
 func uploadKnowledgeDocumentForTest(t *testing.T, port int, token, kbID string) string {
 	t.Helper()
 
+	return uploadNamedKnowledgeDocumentForTest(t, port, token, kbID, "运维手册.md", "# 运维手册\n\n这是测试文档内容。")
+}
+
+func uploadNamedKnowledgeDocumentForTest(t *testing.T, port int, token, kbID, fileName, content string) string {
+	t.Helper()
+
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 	_ = writer.WriteField("sourceType", "file")
 	_ = writer.WriteField("processMode", "chunk")
 	_ = writer.WriteField("chunkStrategy", "structure_aware")
 	_ = writer.WriteField("chunkConfig", `{"maxTokens":512,"overlap":64}`)
-	fileWriter, err := writer.CreateFormFile("file", "运维手册.md")
+	fileWriter, err := writer.CreateFormFile("file", fileName)
 	if err != nil {
 		t.Fatalf("create multipart file failed: %v", err)
 	}
-	if _, err := fileWriter.Write([]byte("# 运维手册\n\n这是测试文档内容。")); err != nil {
+	if _, err := fileWriter.Write([]byte(content)); err != nil {
 		t.Fatalf("write multipart file failed: %v", err)
 	}
 	if err := writer.Close(); err != nil {
