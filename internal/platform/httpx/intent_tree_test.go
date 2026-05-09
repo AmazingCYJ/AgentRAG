@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -137,11 +138,113 @@ func TestIntentTreeCRUDAndBatchActions(t *testing.T) {
 }
 
 type intentTreeNodeForTest struct {
-	ID         string                 `json:"id"`
-	IntentCode string                 `json:"intentCode"`
-	Name       string                 `json:"name"`
-	Enabled    int                    `json:"enabled"`
-	Children   []intentTreeNodeForTest `json:"children"`
+	ID                  string                  `json:"id"`
+	IntentCode          string                  `json:"intentCode"`
+	Name                string                  `json:"name"`
+	Level               int                     `json:"level"`
+	ParentCode          string                  `json:"parentCode"`
+	Examples            string                  `json:"examples"`
+	CollectionName      string                  `json:"collectionName"`
+	MCPToolID           string                  `json:"mcpToolId"`
+	TopK                *int                    `json:"topK"`
+	Kind                int                     `json:"kind"`
+	Enabled             int                     `json:"enabled"`
+	PromptSnippet       string                  `json:"promptSnippet"`
+	PromptTemplate      string                  `json:"promptTemplate"`
+	ParamPromptTemplate string                  `json:"paramPromptTemplate"`
+	Children            []intentTreeNodeForTest `json:"children"`
+}
+
+func TestIntentTreePersistsThroughConfiguredDatabase(t *testing.T) {
+	dsn := filepath.Join(t.TempDir(), "agentrag.db")
+	cfg := appconfig.Config{
+		HTTP: appconfig.HTTPConfig{Port: 8080},
+		Auth: appconfig.AuthConfig{
+			JWTSecret: "test-secret",
+			TokenTTL:  time.Hour,
+			Bootstrap: appconfig.BootstrapUserConfig{
+				UserID:   "u_admin",
+				Username: "admin",
+				Password: "admin123",
+				Role:     "admin",
+			},
+		},
+		Database: appconfig.DatabaseConfig{
+			Driver: "sqlite",
+			DSN:    dsn,
+		},
+	}
+
+	server := newServer(&cfg, guid.S())
+	server.SetAddr("127.0.0.1:0")
+	if err := server.Start(); err != nil {
+		t.Fatalf("start server failed: %v", err)
+	}
+	time.Sleep(100 * time.Millisecond)
+
+	token := loginAndGetToken(t, server.GetListenedPort())
+	topK := 5
+	rootID := createIntentNodeForTest(t, server.GetListenedPort(), token, map[string]any{
+		"kbId":           "kb_sql",
+		"intentCode":     "sql_policy",
+		"name":           "SQL 制度问答",
+		"level":          0,
+		"kind":           1,
+		"enabled":        1,
+		"sortOrder":      10,
+		"description":    "SQL 持久化意图",
+		"examples":       []string{"SQL 意图路由"},
+		"topK":           topK,
+		"promptSnippet":  "优先使用 SQL 节点",
+		"promptTemplate": "你是 SQL 意图助手",
+	})
+	createIntentNodeForTest(t, server.GetListenedPort(), token, map[string]any{
+		"intentCode":          "sql_ticket",
+		"name":                "SQL 工单工具",
+		"level":               1,
+		"parentCode":          "sql_policy",
+		"kind":                2,
+		"enabled":             1,
+		"sortOrder":           20,
+		"mcpToolId":           "ticket_query",
+		"examples":            []string{"查工单"},
+		"paramPromptTemplate": "抽取 SQL 工单参数",
+	})
+	server.Shutdown()
+
+	recreated := newServer(&cfg, guid.S())
+	recreated.SetAddr("127.0.0.1:0")
+	if err := recreated.Start(); err != nil {
+		t.Fatalf("start recreated server failed: %v", err)
+	}
+	defer recreated.Shutdown()
+	time.Sleep(100 * time.Millisecond)
+
+	recreatedToken := loginAndGetToken(t, recreated.GetListenedPort())
+	tree := getIntentTreeForTest(t, recreated.GetListenedPort(), recreatedToken)
+	if len(tree) != 1 {
+		t.Fatalf("expected 1 root after restart, got %d", len(tree))
+	}
+	root := tree[0]
+	if root.ID != rootID || root.IntentCode != "sql_policy" || root.CollectionName != "kb_sql" {
+		t.Fatalf("unexpected persisted root %#v", root)
+	}
+	if root.TopK == nil || *root.TopK != topK || root.Examples != `["SQL 意图路由"]` {
+		t.Fatalf("unexpected persisted root retrieval fields %#v", root)
+	}
+	if root.PromptSnippet != "优先使用 SQL 节点" || root.PromptTemplate != "你是 SQL 意图助手" {
+		t.Fatalf("unexpected persisted root prompts %#v", root)
+	}
+	if len(root.Children) != 1 {
+		t.Fatalf("expected 1 persisted child, got %d", len(root.Children))
+	}
+	child := root.Children[0]
+	if child.IntentCode != "sql_ticket" || child.ParentCode != "sql_policy" || child.MCPToolID != "ticket_query" {
+		t.Fatalf("unexpected persisted child %#v", child)
+	}
+	if child.ParamPromptTemplate != "抽取 SQL 工单参数" || child.Kind != 2 {
+		t.Fatalf("unexpected persisted child tool fields %#v", child)
+	}
 }
 
 func createIntentNodeForTest(t *testing.T, port int, token string, payload map[string]any) string {
@@ -197,7 +300,7 @@ func getIntentTreeForTest(t *testing.T, port int, token string) []intentTreeNode
 	defer response.Body.Close()
 
 	var body struct {
-		Code string                 `json:"code"`
+		Code string                  `json:"code"`
 		Data []intentTreeNodeForTest `json:"data"`
 	}
 	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
