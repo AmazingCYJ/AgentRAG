@@ -22,9 +22,11 @@ const (
 	thinkingChunkSize    = 10
 	responseChunkSize    = 18
 	historyMessageLimit  = 12
+	defaultMaxConcurrent = 8
 	prepareDelay         = 40 * time.Millisecond
 	chunkDelay           = 20 * time.Millisecond
 	conversationIDPrefix = "conv_"
+	rejectMessage        = "当前对话请求较多，请稍后再试。"
 )
 
 // StreamRequest 定义流式聊天所需的输入参数。
@@ -66,8 +68,10 @@ type Service struct {
 	traceService        *domainragtrace.Service
 	generator           Generator
 
-	mu    sync.Mutex
-	tasks map[string]taskHandle
+	mu            sync.Mutex
+	tasks         map[string]taskHandle
+	activeStreams int
+	maxConcurrent int
 
 	now    func() time.Time
 	newID  func() string
@@ -89,12 +93,21 @@ func NewService(
 		traceService:        traceService,
 		generator:           generator,
 		tasks:               make(map[string]taskHandle),
+		maxConcurrent:       defaultMaxConcurrent,
 		now:                 time.Now,
 		newID: func() string {
 			return guid.S()
 		},
 		waitFn: waitWithContext,
 	}
+}
+
+// SetMaxConcurrent 设置本实例允许的最大并发流式对话数。
+func (s *Service) SetMaxConcurrent(limit int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.maxConcurrent = limit
 }
 
 // StreamChat 以 SSE 方式输出当前阶段的最小对话结果。
@@ -127,6 +140,11 @@ func (s *Service) StreamChat(ctx context.Context, req StreamRequest, writer Even
 		Content:        question,
 		CreateTime:     startedAt,
 	})
+
+	if !s.tryAcquireStream() {
+		return s.finishRejected(writer, req, conversationID, taskID, title, startedAt)
+	}
+	defer s.releaseStream()
 
 	taskCtx, cancel := context.WithCancel(ctx)
 	s.registerTask(taskID, cancel)
@@ -192,6 +210,44 @@ func (s *Service) StreamChat(ctx context.Context, req StreamRequest, writer Even
 	return writer.Event("done", struct{}{})
 }
 
+func (s *Service) finishRejected(
+	writer EventWriter,
+	req StreamRequest,
+	conversationID, taskID, title string,
+	startedAt time.Time,
+) error {
+	if err := writer.Event("meta", streamMeta{
+		ConversationID: conversationID,
+		TaskID:         taskID,
+	}); err != nil {
+		return err
+	}
+	if err := writer.Event("reject", streamMessage{
+		Type:  "response",
+		Delta: rejectMessage,
+	}); err != nil {
+		return err
+	}
+	messageID := s.persistAssistantMessage(req.UserID, conversationID, title, rejectMessage, "", startedAt)
+	s.recordTrace(req, conversationID, taskID, "failed", rejectMessage, startedAt, s.now(), []WorkflowStep{
+		{
+			NodeID:     "reject_concurrency",
+			NodeType:   "RATE_LIMIT",
+			NodeName:   "Reject Concurrency",
+			Status:     "failed",
+			DurationMs: 1,
+			Detail:     rejectMessage,
+		},
+	})
+	if err := writer.Event("finish", streamCompletion{
+		MessageID: messageID,
+		Title:     title,
+	}); err != nil {
+		return err
+	}
+	return writer.Event("done", struct{}{})
+}
+
 func (s *Service) recentHistory(conversationID, userID string, limit int) []HistoryMessage {
 	if s.conversationService == nil {
 		return nil
@@ -220,6 +276,30 @@ func (s *Service) recentHistory(conversationID, userID string, limit int) []Hist
 		})
 	}
 	return history
+}
+
+func (s *Service) tryAcquireStream() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.maxConcurrent <= 0 {
+		s.activeStreams++
+		return true
+	}
+	if s.activeStreams >= s.maxConcurrent {
+		return false
+	}
+	s.activeStreams++
+	return true
+}
+
+func (s *Service) releaseStream() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.activeStreams > 0 {
+		s.activeStreams--
+	}
 }
 
 // StopTask 取消指定流式任务，未知任务按幂等成功处理。

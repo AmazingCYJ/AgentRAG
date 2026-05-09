@@ -20,6 +20,20 @@ func (w *fakeWriter) Event(name string, payload any) error {
 	return nil
 }
 
+type recordedEvent struct {
+	name    string
+	payload any
+}
+
+type recordingWriter struct {
+	events []recordedEvent
+}
+
+func (w *recordingWriter) Event(name string, payload any) error {
+	w.events = append(w.events, recordedEvent{name: name, payload: payload})
+	return nil
+}
+
 type fakeGenerator struct {
 	thinking string
 	answer   string
@@ -83,6 +97,70 @@ func TestStreamChatUsesConfiguredGeneratorOutput(t *testing.T) {
 	if messages[1].Content != "这是生成器回答内容" {
 		t.Fatalf("expected generator answer content, got %s", messages[1].Content)
 	}
+}
+
+func TestStreamChatRejectsWhenConcurrencyLimitReached(t *testing.T) {
+	conversationService := domainconversation.NewService(nil)
+	generatorCalled := false
+	service := NewService(
+		conversationService,
+		nil,
+		GeneratorFunc(func(_ context.Context, _ GenerateRequest) (GenerateResult, error) {
+			generatorCalled = true
+			return GenerateResult{Answer: "不应该生成"}, nil
+		}),
+	)
+	service.maxConcurrent = 1
+	service.activeStreams = 1
+	service.now = func() time.Time {
+		return time.Date(2026, 5, 9, 10, 0, 0, 0, time.UTC)
+	}
+	writer := &recordingWriter{}
+
+	err := service.StreamChat(context.Background(), StreamRequest{
+		UserID:   "u_admin",
+		Username: "admin",
+		Question: "测试并发拒绝",
+	}, writer)
+	if err != nil {
+		t.Fatalf("stream chat failed: %v", err)
+	}
+	if generatorCalled {
+		t.Fatal("generator should not be called when concurrency limit is reached")
+	}
+	if got := eventNames(writer.events); strings.Join(got, ",") != "meta,reject,finish,done" {
+		t.Fatalf("expected meta,reject,finish,done events, got %v", got)
+	}
+	reject, ok := writer.events[1].payload.(streamMessage)
+	if !ok {
+		t.Fatalf("expected reject payload streamMessage, got %#v", writer.events[1].payload)
+	}
+	if reject.Type != "response" || !strings.Contains(reject.Delta, "请求较多") {
+		t.Fatalf("unexpected reject payload %#v", reject)
+	}
+	finish, ok := writer.events[2].payload.(streamCompletion)
+	if !ok || finish.MessageID == "" || finish.Title == "" {
+		t.Fatalf("expected finish payload with message id and title, got %#v", writer.events[2].payload)
+	}
+	sessions := conversationService.ListByUserID("u_admin")
+	if len(sessions) != 1 {
+		t.Fatalf("expected rejected conversation to be saved, got %d sessions", len(sessions))
+	}
+	messages := conversationService.ListMessages(sessions[0].ConversationID, "u_admin")
+	if len(messages) != 2 {
+		t.Fatalf("expected user and assistant reject messages, got %#v", messages)
+	}
+	if messages[1].ID != finish.MessageID || !strings.Contains(messages[1].Content, "请求较多") {
+		t.Fatalf("expected persisted reject assistant message, got %#v", messages[1])
+	}
+}
+
+func eventNames(events []recordedEvent) []string {
+	names := make([]string, 0, len(events))
+	for _, event := range events {
+		names = append(names, event.name)
+	}
+	return names
 }
 
 func TestStreamChatRecordsGeneratorWorkflowSteps(t *testing.T) {

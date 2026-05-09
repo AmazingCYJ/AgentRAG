@@ -3,6 +3,7 @@ package httpx
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -13,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	domainchat "github.com/AmazingCYJ/AgentRAG/internal/domain/chat"
 	domainconversation "github.com/AmazingCYJ/AgentRAG/internal/domain/conversation"
 	domainintenttree "github.com/AmazingCYJ/AgentRAG/internal/domain/intenttree"
 	domainknowledge "github.com/AmazingCYJ/AgentRAG/internal/domain/knowledge"
@@ -25,6 +27,14 @@ import (
 type sseEvent struct {
 	Name string
 	Data json.RawMessage
+}
+
+type fixedChatGenerator struct {
+	answer string
+}
+
+func (g fixedChatGenerator) Generate(_ context.Context, _ domainchat.GenerateRequest) (domainchat.GenerateResult, error) {
+	return domainchat.GenerateResult{Answer: g.answer}, nil
 }
 
 func TestChatStreamCreatesConversationAndEmitsFinishEvents(t *testing.T) {
@@ -238,6 +248,96 @@ func TestStopTaskCancelsStreamingResponse(t *testing.T) {
 	}
 	if messages[1].Role != "assistant" {
 		t.Fatalf("expected second message role assistant, got %s", messages[1].Role)
+	}
+}
+
+func TestChatStreamRejectsWhenConcurrencyLimitReached(t *testing.T) {
+	conversationService := domainconversation.NewService(nil)
+	chatService := domainchat.NewService(
+		conversationService,
+		nil,
+		fixedChatGenerator{answer: strings.Repeat("持续输出。", 200)},
+	)
+	chatService.SetMaxConcurrent(1)
+	server := newServerWithDeps(&appconfig.Config{
+		HTTP: appconfig.HTTPConfig{Port: 8080},
+		Auth: appconfig.AuthConfig{
+			JWTSecret: "test-secret",
+			TokenTTL:  time.Hour,
+			Bootstrap: appconfig.BootstrapUserConfig{
+				UserID:   "u_admin",
+				Username: "admin",
+				Password: "admin123",
+				Role:     "admin",
+			},
+		},
+	}, guid.S(), serverDeps{
+		conversationService: conversationService,
+		chatService:         chatService,
+	})
+	server.SetAddr("127.0.0.1:0")
+	if err := server.Start(); err != nil {
+		t.Fatalf("start server failed: %v", err)
+	}
+	defer server.Shutdown()
+	time.Sleep(100 * time.Millisecond)
+
+	token := loginAndGetToken(t, server.GetListenedPort())
+	client := &http.Client{Timeout: 5 * time.Second}
+	firstRequest, err := http.NewRequest(
+		http.MethodGet,
+		fmt.Sprintf("http://127.0.0.1:%d/rag/v3/chat?question=%s", server.GetListenedPort(), "第一路请求"),
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("create first chat request failed: %v", err)
+	}
+	firstRequest.Header.Set("Authorization", token)
+	firstResponse, err := client.Do(firstRequest)
+	if err != nil {
+		t.Fatalf("request first chat stream failed: %v", err)
+	}
+	defer firstResponse.Body.Close()
+	firstMeta := readSingleSSEEvent(t, bufio.NewReader(firstResponse.Body))
+	if firstMeta.Name != "meta" {
+		t.Fatalf("expected first stream meta event, got %s", firstMeta.Name)
+	}
+
+	secondRequest, err := http.NewRequest(
+		http.MethodGet,
+		fmt.Sprintf("http://127.0.0.1:%d/rag/v3/chat?question=%s", server.GetListenedPort(), "第二路请求"),
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("create second chat request failed: %v", err)
+	}
+	secondRequest.Header.Set("Authorization", token)
+	secondResponse, err := client.Do(secondRequest)
+	if err != nil {
+		t.Fatalf("request second chat stream failed: %v", err)
+	}
+	defer secondResponse.Body.Close()
+
+	events := readSSEEventsUntilDone(t, secondResponse.Body)
+	foundReject := false
+	for _, event := range events {
+		if event.Name != "reject" {
+			continue
+		}
+		foundReject = true
+		var payload struct {
+			Type  string `json:"type"`
+			Delta string `json:"delta"`
+		}
+		if err := json.Unmarshal(event.Data, &payload); err != nil {
+			t.Fatalf("decode reject payload failed: %v", err)
+		}
+		if payload.Type != "response" || !strings.Contains(payload.Delta, "请求较多") {
+			t.Fatalf("unexpected reject payload %#v", payload)
+		}
+	}
+	if !foundReject {
+		t.Fatalf("expected reject event, got %#v", events)
 	}
 }
 
