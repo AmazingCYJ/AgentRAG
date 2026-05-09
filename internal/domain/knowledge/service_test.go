@@ -190,6 +190,34 @@ func TestBuildPromptContextMatchesBusinessSynonyms(t *testing.T) {
 	}
 }
 
+func TestSearchDocumentsMatchesBusinessSynonyms(t *testing.T) {
+	service := NewService(nil)
+	kbID, err := service.CreateKnowledgeBase(KnowledgeBaseCreateRequest{
+		Name:           "财务知识库",
+		EmbeddingModel: "embedding-openai-large",
+		CollectionName: "finance_docs",
+		CreatedBy:      "admin",
+	})
+	if err != nil {
+		t.Fatalf("create knowledge base failed: %v", err)
+	}
+	doc, err := service.UploadDocument(kbID, KnowledgeDocumentUploadRequest{
+		SourceType: "file",
+		FileName:   "报销制度.md",
+	}, "admin")
+	if err != nil {
+		t.Fatalf("upload document failed: %v", err)
+	}
+
+	result := service.SearchDocuments("报账", 5)
+	if len(result) != 1 {
+		t.Fatalf("expected one synonym-matched document, got %#v", result)
+	}
+	if result[0].ID != doc.ID || result[0].KBName != "财务知识库" {
+		t.Fatalf("unexpected search result %#v", result[0])
+	}
+}
+
 func TestStartDocumentChunkUsesUploadedTextContent(t *testing.T) {
 	service := NewService(nil)
 	kbID, err := service.CreateKnowledgeBase(KnowledgeBaseCreateRequest{

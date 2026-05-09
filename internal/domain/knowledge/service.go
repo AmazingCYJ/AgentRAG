@@ -835,26 +835,47 @@ func (s *Service) SearchDocuments(keyword string, limit int) []KnowledgeDocument
 	if limit <= 0 {
 		limit = 8
 	}
-	filtered := make([]KnowledgeDocumentSearchItem, 0, limit)
+	keyword = strings.TrimSpace(keyword)
+	queryTokens := tokenize(keyword)
+
+	type scoredDocument struct {
+		item  KnowledgeDocumentSearchItem
+		score int
+	}
+
+	filtered := make([]scoredDocument, 0, limit)
 	for _, item := range s.documents {
-		if !containsFold(item.DocName, keyword) &&
-			!containsFold(item.SourceLocation, keyword) {
-			continue
+		score := 1
+		if keyword != "" {
+			score = overlapScore(queryTokens, tokenize(item.DocName+" "+item.SourceLocation))
+			if score <= 0 {
+				continue
+			}
 		}
-		filtered = append(filtered, KnowledgeDocumentSearchItem{
-			ID:      item.ID,
-			KBID:    item.KBID,
-			DocName: item.DocName,
-			KBName:  s.knowledgeBases[item.KBID].Name,
+		filtered = append(filtered, scoredDocument{
+			item: KnowledgeDocumentSearchItem{
+				ID:      item.ID,
+				KBID:    item.KBID,
+				DocName: item.DocName,
+				KBName:  s.knowledgeBases[item.KBID].Name,
+			},
+			score: score,
 		})
 	}
 	sort.Slice(filtered, func(i, j int) bool {
-		return filtered[i].DocName < filtered[j].DocName
+		if filtered[i].score == filtered[j].score {
+			return filtered[i].item.DocName < filtered[j].item.DocName
+		}
+		return filtered[i].score > filtered[j].score
 	})
 	if len(filtered) > limit {
-		return filtered[:limit]
+		filtered = filtered[:limit]
 	}
-	return filtered
+	result := make([]KnowledgeDocumentSearchItem, 0, len(filtered))
+	for _, scored := range filtered {
+		result = append(result, scored.item)
+	}
+	return result
 }
 
 // BuildPromptContext 基于现有 Chunk 构建给大模型使用的检索上下文。
