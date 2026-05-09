@@ -12,6 +12,16 @@ func TestLoadParsesHTTPPort(t *testing.T) {
 	}
 }
 
+func TestExampleConfigUsesFrontendProxyPort(t *testing.T) {
+	cfg, err := Load("../../../configs/config.example.yaml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.HTTP.Port != 9090 {
+		t.Fatalf("expected frontend proxy compatible port 9090, got %d", cfg.HTTP.Port)
+	}
+}
+
 func TestLoadParsesAIWorkflowConfig(t *testing.T) {
 	cfg, err := Load("testdata/config.yaml")
 	if err != nil {

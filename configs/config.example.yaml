@@ -1,5 +1,5 @@
 http:
-  port: 8080
+  port: 9090
 auth:
   jwtSecret: "agentrag-dev-secret"
   tokenTtl: "24h"
