@@ -6,6 +6,14 @@ ai:
     rewritePrompt: "请把问题改写成适合检索的中文查询。"
     toolParamPrompt: "请提取工具参数并输出 JSON。"
     knowledgePrompt: "请基于知识上下文回答。"
+rag:
+  rateLimit:
+    global:
+      enabled: true
+      maxConcurrent: 3
+      maxWaitSeconds: 5
+      leaseSeconds: 10
+      pollIntervalMs: 100
 database:
   driver: "sqlite"
   dsn: "data/agentrag.db"

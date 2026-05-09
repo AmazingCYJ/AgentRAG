@@ -31,6 +31,22 @@ func TestLoadParsesAIWorkflowConfig(t *testing.T) {
 	}
 }
 
+func TestLoadParsesRAGRateLimitConfig(t *testing.T) {
+	cfg, err := Load("testdata/config.yaml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.RAG.RateLimit.Global.Enabled == nil || !*cfg.RAG.RateLimit.Global.Enabled {
+		t.Fatalf("expected enabled rate limit, got %#v", cfg.RAG.RateLimit.Global.Enabled)
+	}
+	if cfg.RAG.RateLimit.Global.MaxConcurrent != 3 {
+		t.Fatalf("expected max concurrent 3, got %d", cfg.RAG.RateLimit.Global.MaxConcurrent)
+	}
+	if cfg.RAG.RateLimit.Global.MaxWaitSeconds != 5 {
+		t.Fatalf("expected max wait seconds 5, got %d", cfg.RAG.RateLimit.Global.MaxWaitSeconds)
+	}
+}
+
 func TestLoadParsesDatabaseConfig(t *testing.T) {
 	cfg, err := Load("testdata/config.yaml")
 	if err != nil {

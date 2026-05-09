@@ -34,3 +34,31 @@ func TestServiceGetReflectsConfiguredAISettings(t *testing.T) {
 		t.Fatalf("expected candidate url from config, got %s", result.AI.Chat.Candidates[0].URL)
 	}
 }
+
+func TestServiceGetReflectsConfiguredRateLimit(t *testing.T) {
+	enabled := true
+	service := NewServiceWithConfig(&appconfig.Config{
+		RAG: appconfig.RAGConfig{
+			RateLimit: appconfig.RAGRateLimitConfig{
+				Global: appconfig.GlobalRateLimitConfig{
+					Enabled:        &enabled,
+					MaxConcurrent:  3,
+					MaxWaitSeconds: 5,
+					LeaseSeconds:   10,
+					PollIntervalMs: 100,
+				},
+			},
+		},
+	})
+
+	result := service.Get()
+	if !result.RAG.RateLimit.Global.Enabled {
+		t.Fatal("expected configured rate limit enabled")
+	}
+	if result.RAG.RateLimit.Global.MaxConcurrent != 3 {
+		t.Fatalf("expected max concurrent 3, got %d", result.RAG.RateLimit.Global.MaxConcurrent)
+	}
+	if result.RAG.RateLimit.Global.MaxWaitSeconds != 5 {
+		t.Fatalf("expected max wait seconds 5, got %d", result.RAG.RateLimit.Global.MaxWaitSeconds)
+	}
+}

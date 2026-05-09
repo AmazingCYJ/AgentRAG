@@ -7,6 +7,7 @@ type Config struct {
 	HTTP     HTTPConfig     `json:"http"`
 	Auth     AuthConfig     `json:"auth"`
 	AI       AIConfig       `json:"ai"`
+	RAG      RAGConfig      `json:"rag"`
 	Database DatabaseConfig `json:"database"`
 	State    StateConfig    `json:"state"`
 }
@@ -49,6 +50,25 @@ type AIWorkflowConfig struct {
 	RewritePrompt   string `json:"rewritePrompt"`
 	ToolParamPrompt string `json:"toolParamPrompt"`
 	KnowledgePrompt string `json:"knowledgePrompt"`
+}
+
+// RAGConfig 定义 RAG 运行策略配置。
+type RAGConfig struct {
+	RateLimit RAGRateLimitConfig `json:"rateLimit"`
+}
+
+// RAGRateLimitConfig 定义 RAG 限流配置。
+type RAGRateLimitConfig struct {
+	Global GlobalRateLimitConfig `json:"global"`
+}
+
+// GlobalRateLimitConfig 定义全局聊天并发限流配置。
+type GlobalRateLimitConfig struct {
+	Enabled        *bool `json:"enabled"`
+	MaxConcurrent  int   `json:"maxConcurrent"`
+	MaxWaitSeconds int   `json:"maxWaitSeconds"`
+	LeaseSeconds   int   `json:"leaseSeconds"`
+	PollIntervalMs int   `json:"pollIntervalMs"`
 }
 
 // StateConfig 定义本地状态持久化配置。

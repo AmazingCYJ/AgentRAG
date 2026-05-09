@@ -134,6 +134,7 @@ func newServerWithDeps(cfg *appconfig.Config, name string, deps serverDeps) *ght
 			domainchat.NewGeneratorFromConfig(cfg.AI, knowledgeService.BuildPromptContext, routeResolver, toolCaller),
 		)
 	}
+	applyChatRateLimitConfig(chatService, cfg)
 	ingestionService := deps.ingestionService
 	if ingestionService == nil {
 		ingestionService = newIngestionService(stateStore, database)
@@ -144,11 +145,7 @@ func newServerWithDeps(cfg *appconfig.Config, name string, deps serverDeps) *ght
 	}
 	settingsService := deps.settingsService
 	if settingsService == nil {
-		if cfg == nil {
-			settingsService = domainsettings.NewService()
-		} else {
-			settingsService = domainsettings.NewService(cfg.AI)
-		}
+		settingsService = domainsettings.NewServiceWithConfig(cfg)
 	}
 	sampleQuestionService := deps.sampleQuestionService
 	if sampleQuestionService == nil {
@@ -243,6 +240,23 @@ func newServerWithDeps(cfg *appconfig.Config, name string, deps serverDeps) *ght
 	bindAPIHandler(server, "GET:/rag/v3/chat", chatHandler.StreamChat)
 	bindAPIHandler(server, "POST:/rag/v3/stop", chatHandler.Stop)
 	return server
+}
+
+func applyChatRateLimitConfig(chatService *domainchat.Service, cfg *appconfig.Config) {
+	if chatService == nil || cfg == nil {
+		return
+	}
+	global := cfg.RAG.RateLimit.Global
+	if global.Enabled == nil && global.MaxConcurrent <= 0 {
+		return
+	}
+	if global.Enabled != nil && !*global.Enabled {
+		chatService.SetMaxConcurrent(0)
+		return
+	}
+	if global.MaxConcurrent > 0 {
+		chatService.SetMaxConcurrent(global.MaxConcurrent)
+	}
 }
 
 func bindAPIHandler(server *ghttp.Server, pattern string, handler ghttp.HandlerFunc) {

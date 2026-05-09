@@ -8,7 +8,8 @@ import (
 
 // Service 提供当前阶段只读系统配置视图。
 type Service struct {
-	ai appconfig.AIConfig
+	ai  appconfig.AIConfig
+	rag appconfig.RAGConfig
 }
 
 // NewService 创建系统配置服务。
@@ -18,6 +19,17 @@ func NewService(cfg ...appconfig.AIConfig) *Service {
 		service.ai = cfg[0]
 	}
 	return service
+}
+
+// NewServiceWithConfig 基于完整应用配置创建系统配置服务。
+func NewServiceWithConfig(cfg *appconfig.Config) *Service {
+	if cfg == nil {
+		return NewService()
+	}
+	return &Service{
+		ai:  cfg.AI,
+		rag: cfg.RAG,
+	}
 }
 
 // SystemSettings 定义前端系统配置页所需结构。
@@ -150,13 +162,7 @@ func (s *Service) Get() SystemSettings {
 				MaxHistoryChars:    8000,
 			},
 			RateLimit: RateLimitSettings{
-				Global: GlobalRateLimit{
-					Enabled:        true,
-					MaxConcurrent:  8,
-					MaxWaitSeconds: 15,
-					LeaseSeconds:   30,
-					PollIntervalMs: 200,
-				},
+				Global: s.buildGlobalRateLimit(),
 			},
 			Memory: MemorySettings{
 				HistoryKeepTurns:  12,
@@ -228,6 +234,33 @@ func (s *Service) Get() SystemSettings {
 			},
 		},
 	}
+}
+
+func (s *Service) buildGlobalRateLimit() GlobalRateLimit {
+	result := GlobalRateLimit{
+		Enabled:        true,
+		MaxConcurrent:  8,
+		MaxWaitSeconds: 15,
+		LeaseSeconds:   30,
+		PollIntervalMs: 200,
+	}
+	cfg := s.rag.RateLimit.Global
+	if cfg.Enabled != nil {
+		result.Enabled = *cfg.Enabled
+	}
+	if cfg.MaxConcurrent > 0 {
+		result.MaxConcurrent = cfg.MaxConcurrent
+	}
+	if cfg.MaxWaitSeconds > 0 {
+		result.MaxWaitSeconds = cfg.MaxWaitSeconds
+	}
+	if cfg.LeaseSeconds > 0 {
+		result.LeaseSeconds = cfg.LeaseSeconds
+	}
+	if cfg.PollIntervalMs > 0 {
+		result.PollIntervalMs = cfg.PollIntervalMs
+	}
+	return result
 }
 
 func (s *Service) buildChatModelGroup(baseURL string) ModelGroup {

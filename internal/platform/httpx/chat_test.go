@@ -251,14 +251,14 @@ func TestStopTaskCancelsStreamingResponse(t *testing.T) {
 	}
 }
 
-func TestChatStreamRejectsWhenConcurrencyLimitReached(t *testing.T) {
+func TestChatStreamUsesConfiguredConcurrencyLimit(t *testing.T) {
 	conversationService := domainconversation.NewService(nil)
 	chatService := domainchat.NewService(
 		conversationService,
 		nil,
 		fixedChatGenerator{answer: strings.Repeat("持续输出。", 200)},
 	)
-	chatService.SetMaxConcurrent(1)
+	enabled := true
 	server := newServerWithDeps(&appconfig.Config{
 		HTTP: appconfig.HTTPConfig{Port: 8080},
 		Auth: appconfig.AuthConfig{
@@ -269,6 +269,14 @@ func TestChatStreamRejectsWhenConcurrencyLimitReached(t *testing.T) {
 				Username: "admin",
 				Password: "admin123",
 				Role:     "admin",
+			},
+		},
+		RAG: appconfig.RAGConfig{
+			RateLimit: appconfig.RAGRateLimitConfig{
+				Global: appconfig.GlobalRateLimitConfig{
+					Enabled:       &enabled,
+					MaxConcurrent: 1,
+				},
 			},
 		},
 	}, guid.S(), serverDeps{

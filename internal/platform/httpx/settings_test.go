@@ -190,3 +190,88 @@ func TestGetSystemSettingsReflectsConfiguredAIModels(t *testing.T) {
 		t.Fatalf("expected configured model candidate, got %#v", body.Data.AI.Chat.Candidates)
 	}
 }
+
+func TestGetSystemSettingsReflectsConfiguredRateLimit(t *testing.T) {
+	enabled := true
+	server := newServer(&appconfig.Config{
+		HTTP: appconfig.HTTPConfig{Port: 8080},
+		Auth: appconfig.AuthConfig{
+			JWTSecret: "test-secret",
+			TokenTTL:  time.Hour,
+			Bootstrap: appconfig.BootstrapUserConfig{
+				UserID:   "u_admin",
+				Username: "admin",
+				Password: "admin123",
+				Role:     "admin",
+			},
+		},
+		RAG: appconfig.RAGConfig{
+			RateLimit: appconfig.RAGRateLimitConfig{
+				Global: appconfig.GlobalRateLimitConfig{
+					Enabled:        &enabled,
+					MaxConcurrent:  3,
+					MaxWaitSeconds: 5,
+					LeaseSeconds:   10,
+					PollIntervalMs: 100,
+				},
+			},
+		},
+	}, guid.S())
+	server.SetAddr("127.0.0.1:0")
+	if err := server.Start(); err != nil {
+		t.Fatalf("start server failed: %v", err)
+	}
+	defer server.Shutdown()
+	time.Sleep(100 * time.Millisecond)
+
+	token := loginAndGetToken(t, server.GetListenedPort())
+	request, err := http.NewRequest(http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d/rag/settings", server.GetListenedPort()), nil)
+	if err != nil {
+		t.Fatalf("create settings request failed: %v", err)
+	}
+	request.Header.Set("Authorization", token)
+
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("request settings failed: %v", err)
+	}
+	defer response.Body.Close()
+
+	var body struct {
+		Code string `json:"code"`
+		Data struct {
+			RAG struct {
+				RateLimit struct {
+					Global struct {
+						Enabled        bool `json:"enabled"`
+						MaxConcurrent  int  `json:"maxConcurrent"`
+						MaxWaitSeconds int  `json:"maxWaitSeconds"`
+						LeaseSeconds   int  `json:"leaseSeconds"`
+						PollIntervalMs int  `json:"pollIntervalMs"`
+					} `json:"global"`
+				} `json:"rateLimit"`
+			} `json:"rag"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatalf("decode settings response failed: %v", err)
+	}
+	if body.Code != "0" {
+		t.Fatalf("expected code 0, got %s", body.Code)
+	}
+	if !body.Data.RAG.RateLimit.Global.Enabled {
+		t.Fatal("expected configured rate limit enabled")
+	}
+	if body.Data.RAG.RateLimit.Global.MaxConcurrent != 3 {
+		t.Fatalf("expected max concurrent 3, got %d", body.Data.RAG.RateLimit.Global.MaxConcurrent)
+	}
+	if body.Data.RAG.RateLimit.Global.MaxWaitSeconds != 5 {
+		t.Fatalf("expected max wait seconds 5, got %d", body.Data.RAG.RateLimit.Global.MaxWaitSeconds)
+	}
+	if body.Data.RAG.RateLimit.Global.LeaseSeconds != 10 {
+		t.Fatalf("expected lease seconds 10, got %d", body.Data.RAG.RateLimit.Global.LeaseSeconds)
+	}
+	if body.Data.RAG.RateLimit.Global.PollIntervalMs != 100 {
+		t.Fatalf("expected poll interval 100, got %d", body.Data.RAG.RateLimit.Global.PollIntervalMs)
+	}
+}
