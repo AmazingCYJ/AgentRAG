@@ -9,12 +9,12 @@ import (
 
 // SQLIntentTreeRepository 使用关系型数据库持久化意图节点。
 type SQLIntentTreeRepository struct {
-	database *sql.DB
+	database *SQLDB
 }
 
 // NewSQLIntentTreeRepository 创建意图节点 SQL 仓储。
 func NewSQLIntentTreeRepository(database *sql.DB) *SQLIntentTreeRepository {
-	return &SQLIntentTreeRepository{database: database}
+	return &SQLIntentTreeRepository{database: newSQLDB(database)}
 }
 
 // Bootstrap 初始化意图节点表结构。

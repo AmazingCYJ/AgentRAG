@@ -8,12 +8,12 @@ import (
 
 // SQLQueryMappingRepository 使用关系型数据库持久化关键词映射。
 type SQLQueryMappingRepository struct {
-	database *sql.DB
+	database *SQLDB
 }
 
 // NewSQLQueryMappingRepository 创建关键词映射 SQL 仓储。
 func NewSQLQueryMappingRepository(database *sql.DB) *SQLQueryMappingRepository {
-	return &SQLQueryMappingRepository{database: database}
+	return &SQLQueryMappingRepository{database: newSQLDB(database)}
 }
 
 // Bootstrap 初始化关键词映射表结构。

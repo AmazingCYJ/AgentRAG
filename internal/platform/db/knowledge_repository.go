@@ -8,12 +8,12 @@ import (
 
 // SQLKnowledgeRepository 使用关系型数据库持久化知识库、文档、Chunk 和处理日志。
 type SQLKnowledgeRepository struct {
-	database *sql.DB
+	database *SQLDB
 }
 
 // NewSQLKnowledgeRepository 创建知识库 SQL 仓储。
 func NewSQLKnowledgeRepository(database *sql.DB) *SQLKnowledgeRepository {
-	return &SQLKnowledgeRepository{database: database}
+	return &SQLKnowledgeRepository{database: newSQLDB(database)}
 }
 
 // Bootstrap 初始化知识库相关表结构。
@@ -93,7 +93,7 @@ func (r *SQLKnowledgeRepository) Bootstrap() error {
 		}
 	}
 	// 兼容已存在的早期本地库；列已存在时忽略错误。
-	_, _ = r.database.Exec(`ALTER TABLE agentrag_knowledge_documents ADD COLUMN text_content TEXT NOT NULL DEFAULT ''`)
+	_, _ = r.database.Exec(addColumnSQL(r.database.dialect, "agentrag_knowledge_documents", `text_content TEXT NOT NULL DEFAULT ''`))
 	return nil
 }
 
@@ -285,7 +285,7 @@ func (r *SQLKnowledgeRepository) SaveKnowledgeRecords(bases []domainknowledge.Kn
 	return tx.Commit()
 }
 
-func saveKnowledgeBases(tx *sql.Tx, items []domainknowledge.KnowledgeBase) error {
+func saveKnowledgeBases(tx *SQLTx, items []domainknowledge.KnowledgeBase) error {
 	stmt, err := tx.Prepare(`
 INSERT INTO agentrag_knowledge_bases
     (id, name, embedding_model, collection_name, created_by, document_count, create_time, update_time)
@@ -302,7 +302,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
 	return nil
 }
 
-func saveKnowledgeDocuments(tx *sql.Tx, items []domainknowledge.KnowledgeDocument) error {
+func saveKnowledgeDocuments(tx *SQLTx, items []domainknowledge.KnowledgeDocument) error {
 	stmt, err := tx.Prepare(`
 INSERT INTO agentrag_knowledge_documents
     (id, kb_id, doc_name, source_type, source_location, text_content, schedule_enabled, schedule_cron,
@@ -344,7 +344,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	return nil
 }
 
-func saveKnowledgeChunks(tx *sql.Tx, items []domainknowledge.KnowledgeChunk) error {
+func saveKnowledgeChunks(tx *SQLTx, items []domainknowledge.KnowledgeChunk) error {
 	stmt, err := tx.Prepare(`
 INSERT INTO agentrag_knowledge_chunks
     (id, kb_id, doc_id, chunk_index, content, content_hash, char_count, token_count,
@@ -362,7 +362,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	return nil
 }
 
-func saveKnowledgeLogs(tx *sql.Tx, items []domainknowledge.KnowledgeDocumentChunkLog) error {
+func saveKnowledgeLogs(tx *SQLTx, items []domainknowledge.KnowledgeDocumentChunkLog) error {
 	stmt, err := tx.Prepare(`
 INSERT INTO agentrag_knowledge_chunk_logs
     (id, doc_id, status, process_mode, chunk_strategy, pipeline_id, pipeline_name,

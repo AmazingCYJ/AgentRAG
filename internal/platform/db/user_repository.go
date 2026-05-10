@@ -9,12 +9,12 @@ import (
 
 // SQLUserRepository 使用关系型数据库持久化后台用户。
 type SQLUserRepository struct {
-	database *sql.DB
+	database *SQLDB
 }
 
 // NewSQLUserRepository 创建用户 SQL 仓储。
 func NewSQLUserRepository(database *sql.DB) *SQLUserRepository {
-	return &SQLUserRepository{database: database}
+	return &SQLUserRepository{database: newSQLDB(database)}
 }
 
 // Bootstrap 初始化用户表结构。

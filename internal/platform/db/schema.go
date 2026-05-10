@@ -1,8 +1,16 @@
 package db
 
-import "database/sql"
+func columnExists(database *SQLDB, tableName, columnName string) bool {
+	if database == nil {
+		return false
+	}
+	if database.isPostgres() {
+		return postgresColumnExists(database, tableName, columnName)
+	}
+	return sqliteColumnExists(database, tableName, columnName)
+}
 
-func columnExists(database *sql.DB, tableName, columnName string) bool {
+func sqliteColumnExists(database *SQLDB, tableName, columnName string) bool {
 	rows, err := database.Query(`PRAGMA table_info(` + tableName + `)`)
 	if err != nil {
 		return false
@@ -23,4 +31,16 @@ func columnExists(database *sql.DB, tableName, columnName string) bool {
 		}
 	}
 	return false
+}
+
+func postgresColumnExists(database *SQLDB, tableName, columnName string) bool {
+	row := database.QueryRow(`
+SELECT 1
+FROM information_schema.columns
+WHERE table_schema = current_schema()
+  AND table_name = ?
+  AND column_name = ?
+LIMIT 1`, tableName, columnName)
+	var exists int
+	return row.Scan(&exists) == nil
 }

@@ -9,12 +9,12 @@ import (
 
 // SQLIngestionRepository 使用关系型数据库持久化采集流水线、任务和任务节点。
 type SQLIngestionRepository struct {
-	database *sql.DB
+	database *SQLDB
 }
 
 // NewSQLIngestionRepository 创建采集 SQL 仓储。
 func NewSQLIngestionRepository(database *sql.DB) *SQLIngestionRepository {
-	return &SQLIngestionRepository{database: database}
+	return &SQLIngestionRepository{database: newSQLDB(database)}
 }
 
 // Bootstrap 初始化采集相关表结构。
@@ -265,7 +265,7 @@ func (r *SQLIngestionRepository) SaveIngestionRecords(pipelines []domainingestio
 	return tx.Commit()
 }
 
-func saveIngestionPipelines(tx *sql.Tx, pipelines []domainingestion.Pipeline) error {
+func saveIngestionPipelines(tx *SQLTx, pipelines []domainingestion.Pipeline) error {
 	pipelineStmt, err := tx.Prepare(`
 INSERT INTO agentrag_ingestion_pipelines
     (id, name, description, created_by, create_time, update_time)
@@ -313,7 +313,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
 	return nil
 }
 
-func saveIngestionTasks(tx *sql.Tx, tasks []domainingestion.Task) error {
+func saveIngestionTasks(tx *SQLTx, tasks []domainingestion.Task) error {
 	stmt, err := tx.Prepare(`
 INSERT INTO agentrag_ingestion_tasks
     (id, pipeline_id, source_type, source_location, source_file_name, status, chunk_count,
@@ -348,7 +348,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	return nil
 }
 
-func saveIngestionTaskNodes(tx *sql.Tx, nodes []domainingestion.TaskNode) error {
+func saveIngestionTaskNodes(tx *SQLTx, nodes []domainingestion.TaskNode) error {
 	stmt, err := tx.Prepare(`
 INSERT INTO agentrag_ingestion_task_nodes
     (id, task_id, pipeline_id, node_id, node_type, node_order, status, duration_ms,

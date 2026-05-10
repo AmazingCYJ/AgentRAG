@@ -8,12 +8,12 @@ import (
 
 // SQLConversationRepository 使用关系型数据库持久化会话和消息。
 type SQLConversationRepository struct {
-	database *sql.DB
+	database *SQLDB
 }
 
 // NewSQLConversationRepository 创建会话 SQL 仓储。
 func NewSQLConversationRepository(database *sql.DB) *SQLConversationRepository {
-	return &SQLConversationRepository{database: database}
+	return &SQLConversationRepository{database: newSQLDB(database)}
 }
 
 // Bootstrap 初始化会话和消息表结构。
@@ -222,7 +222,7 @@ func (r *SQLConversationRepository) SaveConversations(sessions []domainconversat
 	return tx.Commit()
 }
 
-func saveSessions(tx *sql.Tx, sessions []domainconversation.Session) error {
+func saveSessions(tx *SQLTx, sessions []domainconversation.Session) error {
 	stmt, err := tx.Prepare(`
 INSERT INTO agentrag_conversations (id, conversation_id, user_id, title, last_time, create_time, update_time, deleted)
 VALUES (?, ?, ?, ?, ?, ?, ?, 0)`)
@@ -240,7 +240,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, 0)`)
 	return nil
 }
 
-func saveMessages(tx *sql.Tx, messages []domainconversation.Message) error {
+func saveMessages(tx *SQLTx, messages []domainconversation.Message) error {
 	stmt, err := tx.Prepare(`
 INSERT INTO agentrag_conversation_messages
     (id, conversation_id, user_id, role, content, thinking_content, thinking_duration, create_time, update_time, deleted)
@@ -268,7 +268,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`)
 	return nil
 }
 
-func saveFeedbacks(tx *sql.Tx, feedbacks []domainconversation.Feedback) error {
+func saveFeedbacks(tx *SQLTx, feedbacks []domainconversation.Feedback) error {
 	stmt, err := tx.Prepare(`
 INSERT INTO agentrag_message_feedback
     (id, message_id, conversation_id, user_id, vote, reason, comment, create_time, update_time, deleted)
@@ -320,15 +320,15 @@ func applyFeedbackVotes(messages []domainconversation.Message, feedbacks []domai
 
 func (r *SQLConversationRepository) migrateLegacyConversationTables() {
 	for _, statement := range []string{
-		`ALTER TABLE agentrag_conversations ADD COLUMN id TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE agentrag_conversations ADD COLUMN create_time TIMESTAMP`,
-		`ALTER TABLE agentrag_conversations ADD COLUMN update_time TIMESTAMP`,
-		`ALTER TABLE agentrag_conversations ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0`,
+		addColumnSQL(r.database.dialect, "agentrag_conversations", `id TEXT NOT NULL DEFAULT ''`),
+		addColumnSQL(r.database.dialect, "agentrag_conversations", `create_time TIMESTAMP`),
+		addColumnSQL(r.database.dialect, "agentrag_conversations", `update_time TIMESTAMP`),
+		addColumnSQL(r.database.dialect, "agentrag_conversations", `deleted INTEGER NOT NULL DEFAULT 0`),
 		`UPDATE agentrag_conversations SET id = conversation_id || '_' || user_id WHERE id = ''`,
 		`UPDATE agentrag_conversations SET create_time = last_time WHERE create_time IS NULL`,
 		`UPDATE agentrag_conversations SET update_time = last_time WHERE update_time IS NULL`,
-		`ALTER TABLE agentrag_conversation_messages ADD COLUMN update_time TIMESTAMP`,
-		`ALTER TABLE agentrag_conversation_messages ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0`,
+		addColumnSQL(r.database.dialect, "agentrag_conversation_messages", `update_time TIMESTAMP`),
+		addColumnSQL(r.database.dialect, "agentrag_conversation_messages", `deleted INTEGER NOT NULL DEFAULT 0`),
 		`UPDATE agentrag_conversation_messages SET update_time = create_time WHERE update_time IS NULL`,
 	} {
 		_, _ = r.database.Exec(statement)
@@ -339,11 +339,24 @@ func (r *SQLConversationRepository) migrateLegacyFeedback() error {
 	if !columnExists(r.database, "agentrag_conversation_messages", "vote") {
 		return nil
 	}
-	_, err := r.database.Exec(`
+	_, err := r.database.Exec(legacyFeedbackInsertSQL(r.database.dialect))
+	return err
+}
+
+func legacyFeedbackInsertSQL(dialect sqlDialect) string {
+	if dialect == postgresDialect {
+		return `
+INSERT INTO agentrag_message_feedback
+    (id, message_id, conversation_id, user_id, vote, reason, comment, create_time, update_time, deleted)
+SELECT id || '_' || user_id, id, conversation_id, user_id, vote, '', '', create_time, create_time, 0
+FROM agentrag_conversation_messages
+WHERE vote IS NOT NULL
+ON CONFLICT (message_id, user_id) DO NOTHING`
+	}
+	return `
 INSERT OR IGNORE INTO agentrag_message_feedback
     (id, message_id, conversation_id, user_id, vote, reason, comment, create_time, update_time, deleted)
 SELECT id || '_' || user_id, id, conversation_id, user_id, vote, '', '', create_time, create_time, 0
 FROM agentrag_conversation_messages
-WHERE vote IS NOT NULL`)
-	return err
+WHERE vote IS NOT NULL`
 }

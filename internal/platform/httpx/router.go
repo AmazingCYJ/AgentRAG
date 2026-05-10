@@ -3,6 +3,9 @@ package httpx
 import (
 	"context"
 	"database/sql"
+	"log"
+	"strings"
+
 	domainauth "github.com/AmazingCYJ/AgentRAG/internal/domain/auth"
 	domainchat "github.com/AmazingCYJ/AgentRAG/internal/domain/chat"
 	domainconversation "github.com/AmazingCYJ/AgentRAG/internal/domain/conversation"
@@ -22,7 +25,6 @@ import (
 	platformstate "github.com/AmazingCYJ/AgentRAG/internal/platform/state"
 	"github.com/gogf/gf/v2/frame/g"
 	"github.com/gogf/gf/v2/net/ghttp"
-	"strings"
 )
 
 type serverDeps struct {
@@ -293,9 +295,14 @@ func openConfiguredDatabase(cfg *appconfig.Config) *sql.DB {
 		DSN:    cfg.Database.DSN,
 	})
 	if err != nil {
+		log.Printf("SQL 数据库初始化失败，回退到本地状态存储: %v", err)
 		return nil
 	}
 	return database
+}
+
+func logSQLRepositoryFallback(name string, err error) {
+	log.Printf("%s SQL 仓储初始化失败，回退到本地状态存储: %v", name, err)
 }
 
 func newUserService(cfg *appconfig.Config, stateStore *platformstate.FileStore, database *sql.DB) *domainusermgmt.Service {
@@ -306,6 +313,8 @@ func newUserService(cfg *appconfig.Config, stateStore *platformstate.FileStore, 
 		repository := platformdb.NewSQLUserRepository(database)
 		if err := repository.Bootstrap(); err == nil {
 			return domainusermgmt.NewServiceWithRepository(cfg.Auth, repository)
+		} else {
+			logSQLRepositoryFallback("用户", err)
 		}
 	}
 	return domainusermgmt.NewService(cfg.Auth, stateStore)
@@ -316,6 +325,8 @@ func newSampleQuestionService(stateStore *platformstate.FileStore, database *sql
 		repository := platformdb.NewSQLSampleQuestionRepository(database)
 		if err := repository.Bootstrap(); err == nil {
 			return domainsamplequestion.NewServiceWithRepository(repository)
+		} else {
+			logSQLRepositoryFallback("示例问题", err)
 		}
 	}
 	return domainsamplequestion.NewService(stateStore)
@@ -326,6 +337,8 @@ func newIntentTreeService(stateStore *platformstate.FileStore, database *sql.DB)
 		repository := platformdb.NewSQLIntentTreeRepository(database)
 		if err := repository.Bootstrap(); err == nil {
 			return domainintenttree.NewServiceWithRepository(repository)
+		} else {
+			logSQLRepositoryFallback("意图树", err)
 		}
 	}
 	return domainintenttree.NewService(stateStore)
@@ -336,6 +349,8 @@ func newQueryMappingService(stateStore *platformstate.FileStore, database *sql.D
 		repository := platformdb.NewSQLQueryMappingRepository(database)
 		if err := repository.Bootstrap(); err == nil {
 			return domainquerymapping.NewServiceWithRepository(repository)
+		} else {
+			logSQLRepositoryFallback("关键词映射", err)
 		}
 	}
 	return domainquerymapping.NewService(stateStore)
@@ -346,6 +361,8 @@ func newConversationService(stateStore *platformstate.FileStore, database *sql.D
 		repository := platformdb.NewSQLConversationRepository(database)
 		if err := repository.Bootstrap(); err == nil {
 			return domainconversation.NewServiceWithRepository(repository)
+		} else {
+			logSQLRepositoryFallback("会话", err)
 		}
 	}
 	return domainconversation.NewService(stateStore)
@@ -356,6 +373,8 @@ func newRagTraceService(stateStore *platformstate.FileStore, database *sql.DB) *
 		repository := platformdb.NewSQLRagTraceRepository(database)
 		if err := repository.Bootstrap(); err == nil {
 			return domainragtrace.NewServiceWithRepository(repository)
+		} else {
+			logSQLRepositoryFallback("Trace", err)
 		}
 	}
 	return domainragtrace.NewService(stateStore)
@@ -366,6 +385,8 @@ func newKnowledgeService(stateStore *platformstate.FileStore, database *sql.DB) 
 		repository := platformdb.NewSQLKnowledgeRepository(database)
 		if err := repository.Bootstrap(); err == nil {
 			return domainknowledge.NewServiceWithRepository(repository)
+		} else {
+			logSQLRepositoryFallback("知识库", err)
 		}
 	}
 	return domainknowledge.NewService(stateStore)
@@ -376,6 +397,8 @@ func newIngestionService(stateStore *platformstate.FileStore, database *sql.DB) 
 		repository := platformdb.NewSQLIngestionRepository(database)
 		if err := repository.Bootstrap(); err == nil {
 			return domainingestion.NewServiceWithRepository(repository)
+		} else {
+			logSQLRepositoryFallback("导入任务", err)
 		}
 	}
 	return domainingestion.NewService(stateStore)

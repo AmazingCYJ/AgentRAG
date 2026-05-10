@@ -18,7 +18,7 @@ func OpenDatabase(cfg Config) (*sql.DB, error) {
 	if driver == "" || dsn == "" {
 		return nil, nil
 	}
-	database, err := sql.Open(driver, dsn)
+	database, err := sql.Open(sqlDriverName(driver), dsn)
 	if err != nil {
 		return nil, err
 	}
@@ -26,5 +26,6 @@ func OpenDatabase(cfg Config) (*sql.DB, error) {
 		_ = database.Close()
 		return nil, err
 	}
+	registerDatabaseDialect(database, driver)
 	return database, nil
 }

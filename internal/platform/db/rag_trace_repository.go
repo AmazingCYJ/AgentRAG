@@ -8,12 +8,12 @@ import (
 
 // SQLRagTraceRepository 使用关系型数据库持久化 RAG Trace。
 type SQLRagTraceRepository struct {
-	database *sql.DB
+	database *SQLDB
 }
 
 // NewSQLRagTraceRepository 创建 RAG Trace SQL 仓储。
 func NewSQLRagTraceRepository(database *sql.DB) *SQLRagTraceRepository {
-	return &SQLRagTraceRepository{database: database}
+	return &SQLRagTraceRepository{database: newSQLDB(database)}
 }
 
 // Bootstrap 初始化 Trace 运行记录和节点表结构。
@@ -189,7 +189,7 @@ func (r *SQLRagTraceRepository) SaveTraceRecords(runs []domainragtrace.Run, node
 	return tx.Commit()
 }
 
-func saveTraceRuns(tx *sql.Tx, runs []domainragtrace.Run) error {
+func saveTraceRuns(tx *SQLTx, runs []domainragtrace.Run) error {
 	stmt, err := tx.Prepare(`
 INSERT INTO agentrag_trace_runs
     (id, trace_id, trace_name, entry_method, conversation_id, task_id, user_name, user_id,
@@ -225,7 +225,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`)
 	return nil
 }
 
-func saveTraceNodes(tx *sql.Tx, nodes []domainragtrace.Node) error {
+func saveTraceNodes(tx *SQLTx, nodes []domainragtrace.Node) error {
 	stmt, err := tx.Prepare(`
 INSERT INTO agentrag_trace_nodes
     (id, trace_id, node_id, parent_node_id, depth, node_type, node_name,
@@ -278,19 +278,19 @@ func defaultTraceNodeID(node domainragtrace.Node) string {
 
 func (r *SQLRagTraceRepository) migrateLegacyTraceTables() {
 	for _, statement := range []string{
-		`ALTER TABLE agentrag_trace_runs ADD COLUMN id TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE agentrag_trace_runs ADD COLUMN extra_data TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE agentrag_trace_runs ADD COLUMN create_time TIMESTAMP`,
-		`ALTER TABLE agentrag_trace_runs ADD COLUMN update_time TIMESTAMP`,
-		`ALTER TABLE agentrag_trace_runs ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0`,
+		addColumnSQL(r.database.dialect, "agentrag_trace_runs", `id TEXT NOT NULL DEFAULT ''`),
+		addColumnSQL(r.database.dialect, "agentrag_trace_runs", `extra_data TEXT NOT NULL DEFAULT ''`),
+		addColumnSQL(r.database.dialect, "agentrag_trace_runs", `create_time TIMESTAMP`),
+		addColumnSQL(r.database.dialect, "agentrag_trace_runs", `update_time TIMESTAMP`),
+		addColumnSQL(r.database.dialect, "agentrag_trace_runs", `deleted INTEGER NOT NULL DEFAULT 0`),
 		`UPDATE agentrag_trace_runs SET id = 'run_' || trace_id WHERE id = ''`,
 		`UPDATE agentrag_trace_runs SET create_time = start_time WHERE create_time IS NULL`,
 		`UPDATE agentrag_trace_runs SET update_time = end_time WHERE update_time IS NULL`,
-		`ALTER TABLE agentrag_trace_nodes ADD COLUMN id TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE agentrag_trace_nodes ADD COLUMN extra_data TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE agentrag_trace_nodes ADD COLUMN create_time TIMESTAMP`,
-		`ALTER TABLE agentrag_trace_nodes ADD COLUMN update_time TIMESTAMP`,
-		`ALTER TABLE agentrag_trace_nodes ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0`,
+		addColumnSQL(r.database.dialect, "agentrag_trace_nodes", `id TEXT NOT NULL DEFAULT ''`),
+		addColumnSQL(r.database.dialect, "agentrag_trace_nodes", `extra_data TEXT NOT NULL DEFAULT ''`),
+		addColumnSQL(r.database.dialect, "agentrag_trace_nodes", `create_time TIMESTAMP`),
+		addColumnSQL(r.database.dialect, "agentrag_trace_nodes", `update_time TIMESTAMP`),
+		addColumnSQL(r.database.dialect, "agentrag_trace_nodes", `deleted INTEGER NOT NULL DEFAULT 0`),
 		`UPDATE agentrag_trace_nodes SET id = trace_id || '_' || node_id WHERE id = ''`,
 		`UPDATE agentrag_trace_nodes SET create_time = start_time WHERE create_time IS NULL`,
 		`UPDATE agentrag_trace_nodes SET update_time = end_time WHERE update_time IS NULL`,

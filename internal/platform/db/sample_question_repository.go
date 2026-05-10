@@ -8,12 +8,12 @@ import (
 
 // SQLSampleQuestionRepository 使用关系型数据库持久化示例问题。
 type SQLSampleQuestionRepository struct {
-	database *sql.DB
+	database *SQLDB
 }
 
 // NewSQLSampleQuestionRepository 创建示例问题 SQL 仓储。
 func NewSQLSampleQuestionRepository(database *sql.DB) *SQLSampleQuestionRepository {
-	return &SQLSampleQuestionRepository{database: database}
+	return &SQLSampleQuestionRepository{database: newSQLDB(database)}
 }
 
 // Bootstrap 初始化示例问题表结构。
