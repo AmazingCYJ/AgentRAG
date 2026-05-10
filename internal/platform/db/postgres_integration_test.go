@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	domainconversation "github.com/AmazingCYJ/AgentRAG/internal/domain/conversation"
 	domainusermgmt "github.com/AmazingCYJ/AgentRAG/internal/domain/usermgmt"
 )
 
@@ -78,6 +79,37 @@ func TestPostgresRepositoryBootstrapSmoke(t *testing.T) {
 	}
 	if len(users) != 1 || users[0].ID != "u_pg" || users[0].Username != "pg_admin" {
 		t.Fatalf("unexpected postgres users %#v", users)
+	}
+
+	conversationRepository := NewSQLConversationRepository(database)
+	if err := conversationRepository.SaveConversations(
+		[]domainconversation.Session{
+			{ConversationID: "conv_pg", UserID: "u_pg", Title: "PostgreSQL 会话", LastTime: now},
+		},
+		[]domainconversation.Message{
+			{ID: "msg_pg", ConversationID: "conv_pg", UserID: "u_pg", Role: "assistant", Content: "PostgreSQL 消息", CreateTime: now.Add(time.Second)},
+		},
+		nil,
+	); err != nil {
+		t.Fatalf("save postgres conversations failed: %v", err)
+	}
+	if err := conversationRepository.SaveConversations(
+		[]domainconversation.Session{
+			{ConversationID: "conv_pg", UserID: "u_pg", Title: "PostgreSQL 会话更新", LastTime: now.Add(time.Minute)},
+		},
+		[]domainconversation.Message{
+			{ID: "msg_pg", ConversationID: "conv_pg", UserID: "u_pg", Role: "assistant", Content: "PostgreSQL 消息更新", CreateTime: now.Add(time.Second)},
+		},
+		nil,
+	); err != nil {
+		t.Fatalf("update postgres conversations failed: %v", err)
+	}
+	sessions, messages, feedbacks, err := conversationRepository.LoadConversations()
+	if err != nil {
+		t.Fatalf("load postgres conversations failed: %v", err)
+	}
+	if len(sessions) != 1 || sessions[0].Title != "PostgreSQL 会话更新" || len(messages) != 1 || messages[0].Content != "PostgreSQL 消息更新" || len(feedbacks) != 0 {
+		t.Fatalf("unexpected postgres conversations sessions=%#v messages=%#v feedbacks=%#v", sessions, messages, feedbacks)
 	}
 }
 

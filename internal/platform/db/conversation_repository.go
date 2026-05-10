@@ -187,15 +187,37 @@ ORDER BY user_id ASC, message_id ASC`)
 
 // SaveConversations 覆盖保存当前会话和消息集合。
 func (r *SQLConversationRepository) SaveConversations(sessions []domainconversation.Session, messages []domainconversation.Message, feedbacks []domainconversation.Feedback) error {
+	sessionIDs := make([]string, 0, len(sessions))
+	for _, session := range sessions {
+		sessionIDs = append(sessionIDs, conversationSessionID(session))
+	}
+	if err := rejectDuplicateIDs(sessionIDs); err != nil {
+		return err
+	}
+	messageIDs := make([]string, 0, len(messages))
+	for _, message := range messages {
+		messageIDs = append(messageIDs, message.ID)
+	}
+	if err := rejectDuplicateIDs(messageIDs); err != nil {
+		return err
+	}
+	feedbackIDs := make([]string, 0, len(feedbacks))
+	for _, feedback := range feedbacks {
+		feedbackIDs = append(feedbackIDs, feedback.ID)
+	}
+	if err := rejectDuplicateIDs(feedbackIDs); err != nil {
+		return err
+	}
+
 	tx, err := r.database.Begin()
 	if err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`DELETE FROM agentrag_message_feedback`); err != nil {
+	if err := deleteMissingRows(tx, "agentrag_message_feedback", "id", feedbackIDs); err != nil {
 		_ = tx.Rollback()
 		return err
 	}
-	if _, err := tx.Exec(`DELETE FROM agentrag_conversation_messages`); err != nil {
+	if err := deleteMissingRows(tx, "agentrag_conversation_messages", "id", messageIDs); err != nil {
 		_ = tx.Rollback()
 		return err
 	}
@@ -203,7 +225,7 @@ func (r *SQLConversationRepository) SaveConversations(sessions []domainconversat
 		_ = tx.Rollback()
 		return err
 	}
-	if _, err := tx.Exec(`DELETE FROM agentrag_conversations`); err != nil {
+	if err := deleteMissingRows(tx, "agentrag_conversations", "id", sessionIDs); err != nil {
 		_ = tx.Rollback()
 		return err
 	}
@@ -222,10 +244,22 @@ func (r *SQLConversationRepository) SaveConversations(sessions []domainconversat
 	return tx.Commit()
 }
 
+func conversationSessionID(session domainconversation.Session) string {
+	return session.ConversationID + "_" + session.UserID
+}
+
 func saveSessions(tx *SQLTx, sessions []domainconversation.Session) error {
 	stmt, err := tx.Prepare(`
 INSERT INTO agentrag_conversations (id, conversation_id, user_id, title, last_time, create_time, update_time, deleted)
-VALUES (?, ?, ?, ?, ?, ?, ?, 0)`)
+VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+ON CONFLICT (id) DO UPDATE SET
+    conversation_id = excluded.conversation_id,
+    user_id = excluded.user_id,
+    title = excluded.title,
+    last_time = excluded.last_time,
+    create_time = excluded.create_time,
+    update_time = excluded.update_time,
+    deleted = 0`)
 	if err != nil {
 		return err
 	}
@@ -233,7 +267,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, 0)`)
 
 	for _, session := range sessions {
 		lastTime := normalizeTime(session.LastTime)
-		if _, err := stmt.Exec(session.ConversationID+"_"+session.UserID, session.ConversationID, session.UserID, session.Title, lastTime, lastTime, lastTime); err != nil {
+		if _, err := stmt.Exec(conversationSessionID(session), session.ConversationID, session.UserID, session.Title, lastTime, lastTime, lastTime); err != nil {
 			return err
 		}
 	}
@@ -244,7 +278,17 @@ func saveMessages(tx *SQLTx, messages []domainconversation.Message) error {
 	stmt, err := tx.Prepare(`
 INSERT INTO agentrag_conversation_messages
     (id, conversation_id, user_id, role, content, thinking_content, thinking_duration, create_time, update_time, deleted)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+ON CONFLICT (id) DO UPDATE SET
+    conversation_id = excluded.conversation_id,
+    user_id = excluded.user_id,
+    role = excluded.role,
+    content = excluded.content,
+    thinking_content = excluded.thinking_content,
+    thinking_duration = excluded.thinking_duration,
+    create_time = excluded.create_time,
+    update_time = excluded.update_time,
+    deleted = 0`)
 	if err != nil {
 		return err
 	}
@@ -272,7 +316,17 @@ func saveFeedbacks(tx *SQLTx, feedbacks []domainconversation.Feedback) error {
 	stmt, err := tx.Prepare(`
 INSERT INTO agentrag_message_feedback
     (id, message_id, conversation_id, user_id, vote, reason, comment, create_time, update_time, deleted)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+ON CONFLICT (id) DO UPDATE SET
+    message_id = excluded.message_id,
+    conversation_id = excluded.conversation_id,
+    user_id = excluded.user_id,
+    vote = excluded.vote,
+    reason = excluded.reason,
+    comment = excluded.comment,
+    create_time = excluded.create_time,
+    update_time = excluded.update_time,
+    deleted = 0`)
 	if err != nil {
 		return err
 	}
