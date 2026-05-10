@@ -57,17 +57,34 @@ ORDER BY priority ASC, create_time ASC`)
 
 // SaveQueryMappings 覆盖保存当前关键词映射集合。
 func (r *SQLQueryMappingRepository) SaveQueryMappings(items []domainquerymapping.Item) error {
+	ids := make([]string, 0, len(items))
+	for _, item := range items {
+		ids = append(ids, item.ID)
+	}
+	if err := rejectDuplicateIDs(ids); err != nil {
+		return err
+	}
+
 	tx, err := r.database.Begin()
 	if err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`DELETE FROM agentrag_query_mappings`); err != nil {
+	if err := deleteMissingRows(tx, "agentrag_query_mappings", "id", ids); err != nil {
 		_ = tx.Rollback()
 		return err
 	}
 	stmt, err := tx.Prepare(`
 INSERT INTO agentrag_query_mappings (id, source_term, target_term, match_type, priority, enabled, remark, create_time, update_time)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (id) DO UPDATE SET
+    source_term = excluded.source_term,
+    target_term = excluded.target_term,
+    match_type = excluded.match_type,
+    priority = excluded.priority,
+    enabled = excluded.enabled,
+    remark = excluded.remark,
+    create_time = excluded.create_time,
+    update_time = excluded.update_time`)
 	if err != nil {
 		_ = tx.Rollback()
 		return err

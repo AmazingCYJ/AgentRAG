@@ -56,17 +56,42 @@ ORDER BY create_time ASC`)
 
 // SaveUsers 覆盖保存当前内存中的后台用户集合。
 func (r *SQLUserRepository) SaveUsers(users []domainusermgmt.User) error {
+	ids := make([]string, 0, len(users))
+	for _, user := range users {
+		ids = append(ids, user.ID)
+	}
+	if err := rejectDuplicateIDs(ids); err != nil {
+		return err
+	}
+
 	tx, err := r.database.Begin()
 	if err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`DELETE FROM agentrag_users`); err != nil {
+	replaceAll, err := userSnapshotNeedsFullReplace(tx, users, ids)
+	if err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if replaceAll {
+		_, err = tx.Exec(`DELETE FROM agentrag_users`)
+	} else {
+		err = deleteMissingRows(tx, "agentrag_users", "id", ids)
+	}
+	if err != nil {
 		_ = tx.Rollback()
 		return err
 	}
 	stmt, err := tx.Prepare(`
 INSERT INTO agentrag_users (id, username, password, role, avatar, create_time, update_time)
-VALUES (?, ?, ?, ?, ?, ?, ?)`)
+VALUES (?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (id) DO UPDATE SET
+    username = excluded.username,
+    password = excluded.password,
+    role = excluded.role,
+    avatar = excluded.avatar,
+    create_time = excluded.create_time,
+    update_time = excluded.update_time`)
 	if err != nil {
 		_ = tx.Rollback()
 		return err
@@ -82,6 +107,36 @@ VALUES (?, ?, ?, ?, ?, ?, ?)`)
 		}
 	}
 	return tx.Commit()
+}
+
+func userSnapshotNeedsFullReplace(tx *SQLTx, users []domainusermgmt.User, ids []string) (bool, error) {
+	if len(ids) == 0 {
+		return false, nil
+	}
+	desiredOwnerByUsername := make(map[string]string, len(users))
+	for _, user := range users {
+		desiredOwnerByUsername[user.Username] = user.ID
+	}
+
+	rows, err := tx.Query("SELECT id, username FROM agentrag_users WHERE id IN ("+questionPlaceholders(len(ids))+")", stringArgs(ids)...)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			id       string
+			username string
+		)
+		if err := rows.Scan(&id, &username); err != nil {
+			return false, err
+		}
+		if ownerID, ok := desiredOwnerByUsername[username]; ok && ownerID != id {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 func normalizeTime(value time.Time) time.Time {

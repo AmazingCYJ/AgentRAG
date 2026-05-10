@@ -54,17 +54,31 @@ ORDER BY update_time DESC`)
 
 // SaveSampleQuestions 覆盖保存当前示例问题集合。
 func (r *SQLSampleQuestionRepository) SaveSampleQuestions(items []domainsamplequestion.Item) error {
+	ids := make([]string, 0, len(items))
+	for _, item := range items {
+		ids = append(ids, item.ID)
+	}
+	if err := rejectDuplicateIDs(ids); err != nil {
+		return err
+	}
+
 	tx, err := r.database.Begin()
 	if err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`DELETE FROM agentrag_sample_questions`); err != nil {
+	if err := deleteMissingRows(tx, "agentrag_sample_questions", "id", ids); err != nil {
 		_ = tx.Rollback()
 		return err
 	}
 	stmt, err := tx.Prepare(`
 INSERT INTO agentrag_sample_questions (id, title, description, question, create_time, update_time)
-VALUES (?, ?, ?, ?, ?, ?)`)
+VALUES (?, ?, ?, ?, ?, ?)
+ON CONFLICT (id) DO UPDATE SET
+    title = excluded.title,
+    description = excluded.description,
+    question = excluded.question,
+    create_time = excluded.create_time,
+    update_time = excluded.update_time`)
 	if err != nil {
 		_ = tx.Rollback()
 		return err

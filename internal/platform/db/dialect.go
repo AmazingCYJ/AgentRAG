@@ -102,6 +102,10 @@ func (tx *SQLTx) Exec(query string, args ...any) (sql.Result, error) {
 	return tx.raw.Exec(bindPlaceholders(tx.dialect, query), args...)
 }
 
+func (tx *SQLTx) Query(query string, args ...any) (*sql.Rows, error) {
+	return tx.raw.Query(bindPlaceholders(tx.dialect, query), args...)
+}
+
 func (tx *SQLTx) Prepare(query string) (*sql.Stmt, error) {
 	return tx.raw.Prepare(bindPlaceholders(tx.dialect, query))
 }
