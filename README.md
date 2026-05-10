@@ -26,3 +26,9 @@ Recreate the database volume after changing init SQL:
 ```bash
 make postgres-reset
 ```
+
+PostgreSQL SQL files live under `resources/database`:
+
+- `schema_pg.sql`: fresh database schema.
+- `init_data_pg.sql`: bootstrap data.
+- `upgrade_v1.0_to_v1.1.sql`: manual upgrade from older repository-created tables to the current schema shape.

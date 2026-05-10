@@ -82,3 +82,34 @@ func TestPostgresComposeRunsSchemaAndInitData(t *testing.T) {
 		}
 	}
 }
+
+func TestPostgresUpgradeScriptCoversRuntimeMigrations(t *testing.T) {
+	content, err := os.ReadFile("../../../resources/database/upgrade_v1.0_to_v1.1.sql")
+	if err != nil {
+		t.Fatalf("read postgres upgrade script failed: %v", err)
+	}
+	upgrade := string(content)
+	for _, expected := range []string{
+		"ALTER TABLE agentrag_conversations ADD COLUMN IF NOT EXISTS id TEXT NOT NULL DEFAULT ''",
+		"WHERE id IS NULL OR id = ''",
+		"ALTER TABLE agentrag_conversation_messages ADD COLUMN IF NOT EXISTS thinking_content TEXT NOT NULL DEFAULT ''",
+		"CREATE TABLE IF NOT EXISTS agentrag_message_feedback",
+		"CREATE UNIQUE INDEX IF NOT EXISTS uq_agentrag_message_feedback_message_user",
+		"column_name = 'vote'",
+		"ON CONFLICT (message_id, user_id) DO NOTHING",
+		"ALTER TABLE agentrag_trace_runs ADD COLUMN IF NOT EXISTS id TEXT NOT NULL DEFAULT ''",
+		"ALTER TABLE agentrag_trace_nodes ADD COLUMN IF NOT EXISTS id TEXT NOT NULL DEFAULT ''",
+		"ALTER TABLE agentrag_knowledge_documents ADD COLUMN IF NOT EXISTS text_content TEXT NOT NULL DEFAULT ''",
+		"RENAME COLUMN embedding_duration TO embed_duration",
+		"ALTER TABLE agentrag_knowledge_chunk_logs ADD COLUMN IF NOT EXISTS persist_duration INTEGER NOT NULL DEFAULT 0",
+		"ck_agentrag_intent_nodes_top_k_positive",
+		"NOT VALID",
+	} {
+		if !strings.Contains(upgrade, expected) {
+			t.Fatalf("postgres upgrade script missing %q", expected)
+		}
+	}
+	if strings.Contains(upgrade, " t_") {
+		t.Fatal("postgres upgrade script should use Go repository table names, not legacy t_* names")
+	}
+}
