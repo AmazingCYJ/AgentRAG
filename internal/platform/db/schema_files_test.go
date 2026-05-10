@@ -62,3 +62,23 @@ func TestPostgresInitDataSeedsBootstrapUser(t *testing.T) {
 		}
 	}
 }
+
+func TestPostgresComposeRunsSchemaAndInitData(t *testing.T) {
+	content, err := os.ReadFile("../../../resources/docker/postgres.compose.yaml")
+	if err != nil {
+		t.Fatalf("read postgres compose failed: %v", err)
+	}
+	compose := string(content)
+	for _, expected := range []string{
+		"name: agentrag",
+		"postgres:16-alpine",
+		"POSTGRES_DB: ragent",
+		"../database/schema_pg.sql:/docker-entrypoint-initdb.d/01_schema_pg.sql:ro",
+		"../database/init_data_pg.sql:/docker-entrypoint-initdb.d/02_init_data_pg.sql:ro",
+		"pg_isready -U postgres -d ragent",
+	} {
+		if !strings.Contains(compose, expected) {
+			t.Fatalf("postgres compose missing %q", expected)
+		}
+	}
+}

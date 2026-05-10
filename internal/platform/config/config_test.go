@@ -69,3 +69,16 @@ func TestLoadParsesDatabaseConfig(t *testing.T) {
 		t.Fatalf("expected database dsn data/agentrag.db, got %s", cfg.Database.DSN)
 	}
 }
+
+func TestPostgresExampleConfigUsesLocalDatabase(t *testing.T) {
+	cfg, err := Load("../../../configs/config.postgres.example.yaml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Database.Driver != "postgres" {
+		t.Fatalf("expected postgres driver, got %s", cfg.Database.Driver)
+	}
+	if cfg.Database.DSN != "postgres://postgres:postgres@127.0.0.1:5432/ragent?sslmode=disable" {
+		t.Fatalf("unexpected postgres dsn %s", cfg.Database.DSN)
+	}
+}

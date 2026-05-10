@@ -1,0 +1,24 @@
+name: agentrag
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: agentrag-postgres
+    environment:
+      POSTGRES_DB: ragent
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - agentrag-postgres-data:/var/lib/postgresql/data
+      - ../database/schema_pg.sql:/docker-entrypoint-initdb.d/01_schema_pg.sql:ro
+      - ../database/init_data_pg.sql:/docker-entrypoint-initdb.d/02_init_data_pg.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d ragent"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  agentrag-postgres-data:
