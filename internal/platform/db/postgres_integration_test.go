@@ -9,6 +9,7 @@ import (
 
 	domainconversation "github.com/AmazingCYJ/AgentRAG/internal/domain/conversation"
 	domainingestion "github.com/AmazingCYJ/AgentRAG/internal/domain/ingestion"
+	domainintenttree "github.com/AmazingCYJ/AgentRAG/internal/domain/intenttree"
 	domainknowledge "github.com/AmazingCYJ/AgentRAG/internal/domain/knowledge"
 	domainragtrace "github.com/AmazingCYJ/AgentRAG/internal/domain/ragtrace"
 	domainusermgmt "github.com/AmazingCYJ/AgentRAG/internal/domain/usermgmt"
@@ -82,6 +83,32 @@ func TestPostgresRepositoryBootstrapSmoke(t *testing.T) {
 	}
 	if len(users) != 1 || users[0].ID != "u_pg" || users[0].Username != "pg_admin" {
 		t.Fatalf("unexpected postgres users %#v", users)
+	}
+
+	intentTreeRepository := NewSQLIntentTreeRepository(database)
+	intentTopK := 6
+	if err := intentTreeRepository.SaveNodes([]domainintenttree.Node{
+		{ID: "intent_pg", KBID: "kb_pg", IntentCode: "policy", Name: "PostgreSQL 意图", Level: 0, Description: "制度查询", Examples: []string{"报销规则"}, CollectionName: "pg_collection", TopK: &intentTopK, Kind: 1, SortOrder: 1, Enabled: 1, PromptSnippet: "引用原文", CreateTime: now, UpdateTime: now},
+		{ID: "intent_remove_pg", IntentCode: "remove", Name: "待删除意图", Level: 0, Kind: 0, SortOrder: 2, Enabled: 1, CreateTime: now.Add(time.Second), UpdateTime: now.Add(time.Second)},
+	}); err != nil {
+		t.Fatalf("save postgres intent nodes failed: %v", err)
+	}
+	if err := intentTreeRepository.SaveNodes([]domainintenttree.Node{
+		{ID: "intent_pg", IntentCode: "policy_updated", Name: "PostgreSQL 意图更新", Level: 1, ParentCode: "root", Kind: 2, SortOrder: 3, Enabled: 0, PromptTemplate: "更新模板", CreateTime: now, UpdateTime: now.Add(time.Minute)},
+		{ID: "intent_new_pg", IntentCode: "root", Name: "PostgreSQL 新意图", Level: 0, Kind: 0, SortOrder: 1, Enabled: 1, CreateTime: now.Add(2 * time.Second), UpdateTime: now.Add(2 * time.Second)},
+	}); err != nil {
+		t.Fatalf("update postgres intent nodes failed: %v", err)
+	}
+	intentNodes, err := intentTreeRepository.LoadNodes()
+	if err != nil {
+		t.Fatalf("load postgres intent nodes failed: %v", err)
+	}
+	intentNodesByID := map[string]domainintenttree.Node{}
+	for _, node := range intentNodes {
+		intentNodesByID[node.ID] = node
+	}
+	if len(intentNodes) != 2 || intentNodesByID["intent_pg"].IntentCode != "policy_updated" || intentNodesByID["intent_pg"].Enabled != 0 || intentNodesByID["intent_pg"].TopK != nil || intentNodesByID["intent_new_pg"].Name != "PostgreSQL 新意图" {
+		t.Fatalf("unexpected postgres intent nodes %#v", intentNodes)
 	}
 
 	conversationRepository := NewSQLConversationRepository(database)

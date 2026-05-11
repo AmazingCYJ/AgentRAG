@@ -101,11 +101,19 @@ ORDER BY create_time ASC`)
 
 // SaveNodes 覆盖保存当前意图节点集合。
 func (r *SQLIntentTreeRepository) SaveNodes(nodes []domainintenttree.Node) error {
+	ids := make([]string, 0, len(nodes))
+	for _, node := range nodes {
+		ids = append(ids, node.ID)
+	}
+	if err := rejectDuplicateIDs(ids); err != nil {
+		return err
+	}
+
 	tx, err := r.database.Begin()
 	if err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`DELETE FROM agentrag_intent_nodes`); err != nil {
+	if err := deleteMissingRows(tx, "agentrag_intent_nodes", "id", ids); err != nil {
 		_ = tx.Rollback()
 		return err
 	}
@@ -114,7 +122,27 @@ INSERT INTO agentrag_intent_nodes
     (id, kb_id, intent_code, name, level, parent_code, description, examples,
      collection_name, top_k, mcp_tool_id, kind, prompt_snippet, prompt_template,
      param_prompt_template, sort_order, enabled, create_time, update_time, deleted)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+ON CONFLICT (id) DO UPDATE SET
+    kb_id = excluded.kb_id,
+    intent_code = excluded.intent_code,
+    name = excluded.name,
+    level = excluded.level,
+    parent_code = excluded.parent_code,
+    description = excluded.description,
+    examples = excluded.examples,
+    collection_name = excluded.collection_name,
+    top_k = excluded.top_k,
+    mcp_tool_id = excluded.mcp_tool_id,
+    kind = excluded.kind,
+    prompt_snippet = excluded.prompt_snippet,
+    prompt_template = excluded.prompt_template,
+    param_prompt_template = excluded.param_prompt_template,
+    sort_order = excluded.sort_order,
+    enabled = excluded.enabled,
+    create_time = excluded.create_time,
+    update_time = excluded.update_time,
+    deleted = 0`)
 	if err != nil {
 		_ = tx.Rollback()
 		return err
