@@ -312,6 +312,57 @@ func TestStartDocumentChunkUsesUploadedTextContent(t *testing.T) {
 	}
 }
 
+func TestKnowledgeChunkCachesLocalEmbedding(t *testing.T) {
+	service := NewService(nil)
+	kbID, err := service.CreateKnowledgeBase(KnowledgeBaseCreateRequest{
+		Name:           "向量知识库",
+		EmbeddingModel: "embedding-local-bge",
+		CollectionName: "vector_docs",
+		CreatedBy:      "admin",
+	})
+	if err != nil {
+		t.Fatalf("create knowledge base failed: %v", err)
+	}
+	doc, err := service.UploadDocument(kbID, KnowledgeDocumentUploadRequest{
+		SourceType: "file",
+		FileName:   "向量说明.md",
+	}, "admin")
+	if err != nil {
+		t.Fatalf("upload document failed: %v", err)
+	}
+	chunk, err := service.CreateChunk(doc.ID, KnowledgeChunkCreateRequest{
+		Content: "报销流程需要发票和审批单",
+	})
+	if err != nil {
+		t.Fatalf("create chunk failed: %v", err)
+	}
+	if chunk.EmbeddingModel != "embedding-local-bge" {
+		t.Fatalf("expected chunk embedding model to follow knowledge base, got %s", chunk.EmbeddingModel)
+	}
+	if len(chunk.Embedding) != localEmbeddingDimensions {
+		t.Fatalf("expected chunk embedding dimensions %d, got %d", localEmbeddingDimensions, len(chunk.Embedding))
+	}
+	oldEmbedding := cloneFloat64Slice(chunk.Embedding)
+
+	if err := service.UpdateChunk(doc.ID, chunk.ID, KnowledgeChunkUpdateRequest{Content: "账号登录需要密码"}); err != nil {
+		t.Fatalf("update chunk failed: %v", err)
+	}
+	page, err := service.PageChunks(doc.ID, KnowledgeChunkPageRequest{Current: 1, Size: 10})
+	if err != nil {
+		t.Fatalf("page chunks failed: %v", err)
+	}
+	if page.Total != 1 {
+		t.Fatalf("expected one chunk, got %#v", page)
+	}
+	updated := page.Records[0]
+	if updated.EmbeddingModel != "embedding-local-bge" || len(updated.Embedding) != localEmbeddingDimensions {
+		t.Fatalf("expected updated chunk embedding cache, got %#v", updated)
+	}
+	if cosineSimilarity(oldEmbedding, updated.Embedding) >= 0.999999 {
+		t.Fatalf("expected embedding to change after content update")
+	}
+}
+
 func TestEnableDocumentPersistsState(t *testing.T) {
 	repository := &memoryKnowledgeRepository{}
 	service := NewServiceWithRepository(repository)

@@ -100,6 +100,8 @@ func TestPostgresUpgradeScriptCoversRuntimeMigrations(t *testing.T) {
 		"ALTER TABLE agentrag_trace_runs ADD COLUMN IF NOT EXISTS id TEXT NOT NULL DEFAULT ''",
 		"ALTER TABLE agentrag_trace_nodes ADD COLUMN IF NOT EXISTS id TEXT NOT NULL DEFAULT ''",
 		"ALTER TABLE agentrag_knowledge_documents ADD COLUMN IF NOT EXISTS text_content TEXT NOT NULL DEFAULT ''",
+		"ALTER TABLE agentrag_knowledge_chunks ADD COLUMN IF NOT EXISTS embedding_model TEXT NOT NULL DEFAULT ''",
+		"ALTER TABLE agentrag_knowledge_chunks ADD COLUMN IF NOT EXISTS embedding_vector TEXT NOT NULL DEFAULT ''",
 		"RENAME COLUMN embedding_duration TO embed_duration",
 		"ALTER TABLE agentrag_knowledge_chunk_logs ADD COLUMN IF NOT EXISTS persist_duration INTEGER NOT NULL DEFAULT 0",
 		"ck_agentrag_intent_nodes_top_k_positive",

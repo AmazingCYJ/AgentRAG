@@ -487,11 +487,13 @@ func TestKnowledgeDocumentAndChunkLifecycle(t *testing.T) {
 		Code string `json:"code"`
 		Data struct {
 			Records []struct {
-				ID         string `json:"id"`
-				DocID      string `json:"docId"`
-				Content    string `json:"content"`
-				Enabled    int    `json:"enabled"`
-				ChunkIndex int    `json:"chunkIndex"`
+				ID             string    `json:"id"`
+				DocID          string    `json:"docId"`
+				Content        string    `json:"content"`
+				EmbeddingModel string    `json:"embeddingModel"`
+				Embedding      []float64 `json:"embedding"`
+				Enabled        int       `json:"enabled"`
+				ChunkIndex     int       `json:"chunkIndex"`
 			} `json:"records"`
 			Total int `json:"total"`
 		} `json:"data"`
@@ -508,6 +510,9 @@ func TestKnowledgeDocumentAndChunkLifecycle(t *testing.T) {
 	combinedChunkContent := ""
 	for _, chunk := range chunksBody.Data.Records {
 		combinedChunkContent += chunk.Content
+		if chunk.Embedding != nil {
+			t.Fatalf("chunk response should not expose raw embedding vector, got %#v", chunk.Embedding)
+		}
 	}
 	if !strings.Contains(combinedChunkContent, "这是测试文档内容") {
 		t.Fatalf("expected chunk content from uploaded file, got %s", combinedChunkContent)

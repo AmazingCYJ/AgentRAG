@@ -57,17 +57,19 @@ func TestSQLKnowledgeRepositorySavesAndLoadsRecords(t *testing.T) {
 		UpdateTime:      now,
 	}
 	chunk := domainknowledge.KnowledgeChunk{
-		ID:          "chunk_sql",
-		KBID:        base.ID,
-		DocID:       doc.ID,
-		ChunkIndex:  0,
-		Content:     "SQL Chunk 内容",
-		ContentHash: "SQL Chunk 内容",
-		CharCount:   12,
-		TokenCount:  3,
-		Enabled:     1,
-		CreateTime:  now,
-		UpdateTime:  now,
+		ID:             "chunk_sql",
+		KBID:           base.ID,
+		DocID:          doc.ID,
+		ChunkIndex:     0,
+		Content:        "SQL Chunk 内容",
+		ContentHash:    "SQL Chunk 内容",
+		CharCount:      12,
+		TokenCount:     3,
+		EmbeddingModel: "embedding-local-bge",
+		Embedding:      []float64{0.25, -0.5, 0.75},
+		Enabled:        1,
+		CreateTime:     now,
+		UpdateTime:     now,
 	}
 	log := domainknowledge.KnowledgeDocumentChunkLog{
 		ID:              "log_sql",
@@ -110,6 +112,9 @@ func TestSQLKnowledgeRepositorySavesAndLoadsRecords(t *testing.T) {
 	if len(chunks) != 1 || chunks[0].Content != "SQL Chunk 内容" {
 		t.Fatalf("unexpected chunks %#v", chunks)
 	}
+	if chunks[0].EmbeddingModel != "embedding-local-bge" || len(chunks[0].Embedding) != 3 || chunks[0].Embedding[1] != -0.5 {
+		t.Fatalf("unexpected chunk embedding cache %#v", chunks[0])
+	}
 	if len(logs) != 1 || logs[0].TotalDuration != 105 {
 		t.Fatalf("unexpected logs %#v", logs)
 	}
@@ -137,7 +142,7 @@ func TestSQLKnowledgeRepositoryReconcilesSavedRecords(t *testing.T) {
 			{ID: "doc_remove", KBID: "kb_remove", DocName: "删除文档.md", SourceType: "file", SourceLocation: "remove.md", TextContent: "删除正文", Enabled: true, ChunkCount: 1, CreateTime: now.Add(time.Minute), UpdateTime: now.Add(time.Minute)},
 		},
 		[]domainknowledge.KnowledgeChunk{
-			{ID: "chunk_keep", KBID: "kb_keep", DocID: "doc_keep", ChunkIndex: 0, Content: "旧 Chunk", ContentHash: "old-hash", CharCount: 8, TokenCount: 2, Enabled: 1, CreateTime: now, UpdateTime: now},
+			{ID: "chunk_keep", KBID: "kb_keep", DocID: "doc_keep", ChunkIndex: 0, Content: "旧 Chunk", ContentHash: "old-hash", CharCount: 8, TokenCount: 2, EmbeddingModel: "old-embedding", Embedding: []float64{0.1, 0.2}, Enabled: 1, CreateTime: now, UpdateTime: now},
 			{ID: "chunk_remove", KBID: "kb_remove", DocID: "doc_remove", ChunkIndex: 0, Content: "删除 Chunk", ContentHash: "remove-hash", CharCount: 8, TokenCount: 2, Enabled: 1, CreateTime: now.Add(time.Minute), UpdateTime: now.Add(time.Minute)},
 		},
 		[]domainknowledge.KnowledgeDocumentChunkLog{
@@ -158,7 +163,7 @@ func TestSQLKnowledgeRepositoryReconcilesSavedRecords(t *testing.T) {
 			{ID: "doc_new", KBID: "kb_new", DocName: "新增文档.md", SourceType: "file", SourceLocation: "new.md", TextContent: "新增正文", Enabled: true, ChunkCount: 1, CreateTime: now.Add(11 * time.Minute), UpdateTime: now.Add(11 * time.Minute)},
 		},
 		[]domainknowledge.KnowledgeChunk{
-			{ID: "chunk_keep", KBID: "kb_keep", DocID: "doc_keep", ChunkIndex: 1, Content: "新 Chunk", ContentHash: "new-hash", CharCount: 9, TokenCount: 3, Enabled: 0, CreateTime: now, UpdateTime: now.Add(10 * time.Minute)},
+			{ID: "chunk_keep", KBID: "kb_keep", DocID: "doc_keep", ChunkIndex: 1, Content: "新 Chunk", ContentHash: "new-hash", CharCount: 9, TokenCount: 3, EmbeddingModel: "new-embedding", Embedding: []float64{0.3, 0.4, 0.5}, Enabled: 0, CreateTime: now, UpdateTime: now.Add(10 * time.Minute)},
 			{ID: "chunk_new", KBID: "kb_new", DocID: "doc_new", ChunkIndex: 0, Content: "新增 Chunk", ContentHash: "insert-hash", CharCount: 10, TokenCount: 3, Enabled: 1, CreateTime: now.Add(11 * time.Minute), UpdateTime: now.Add(11 * time.Minute)},
 		},
 		[]domainknowledge.KnowledgeDocumentChunkLog{
@@ -205,6 +210,9 @@ func TestSQLKnowledgeRepositoryReconcilesSavedRecords(t *testing.T) {
 	}
 	if chunksByID["chunk_keep"].Content != "新 Chunk" || chunksByID["chunk_keep"].Enabled != 0 || chunksByID["chunk_keep"].ChunkIndex != 1 {
 		t.Fatalf("expected existing knowledge chunk to be updated, got %#v", chunksByID["chunk_keep"])
+	}
+	if chunksByID["chunk_keep"].EmbeddingModel != "new-embedding" || len(chunksByID["chunk_keep"].Embedding) != 3 || chunksByID["chunk_keep"].Embedding[2] != 0.5 {
+		t.Fatalf("expected existing knowledge chunk embedding to be updated, got %#v", chunksByID["chunk_keep"])
 	}
 	logsByID := map[string]domainknowledge.KnowledgeDocumentChunkLog{}
 	for _, item := range logs {

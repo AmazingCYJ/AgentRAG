@@ -226,6 +226,8 @@ CREATE INDEX IF NOT EXISTS idx_agentrag_trace_nodes_trace_id
 ON agentrag_trace_nodes (trace_id, start_time);
 
 ALTER TABLE agentrag_knowledge_documents ADD COLUMN IF NOT EXISTS text_content TEXT NOT NULL DEFAULT '';
+ALTER TABLE agentrag_knowledge_chunks ADD COLUMN IF NOT EXISTS embedding_model TEXT NOT NULL DEFAULT '';
+ALTER TABLE agentrag_knowledge_chunks ADD COLUMN IF NOT EXISTS embedding_vector TEXT NOT NULL DEFAULT '';
 
 DO $$
 BEGIN

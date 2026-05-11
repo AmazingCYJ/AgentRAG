@@ -110,17 +110,19 @@ type KnowledgeDocumentSearchItem struct {
 
 // KnowledgeChunk 表示分块对象。
 type KnowledgeChunk struct {
-	ID          string    `json:"id"`
-	KBID        string    `json:"kbId,omitempty"`
-	DocID       string    `json:"docId"`
-	ChunkIndex  int       `json:"chunkIndex,omitempty"`
-	Content     string    `json:"content,omitempty"`
-	ContentHash string    `json:"contentHash,omitempty"`
-	CharCount   int       `json:"charCount,omitempty"`
-	TokenCount  int       `json:"tokenCount,omitempty"`
-	Enabled     int       `json:"enabled,omitempty"`
-	CreateTime  time.Time `json:"createTime,omitempty"`
-	UpdateTime  time.Time `json:"updateTime,omitempty"`
+	ID             string    `json:"id"`
+	KBID           string    `json:"kbId,omitempty"`
+	DocID          string    `json:"docId"`
+	ChunkIndex     int       `json:"chunkIndex,omitempty"`
+	Content        string    `json:"content,omitempty"`
+	ContentHash    string    `json:"contentHash,omitempty"`
+	CharCount      int       `json:"charCount,omitempty"`
+	TokenCount     int       `json:"tokenCount,omitempty"`
+	EmbeddingModel string    `json:"embeddingModel,omitempty"`
+	Embedding      []float64 `json:"-"`
+	Enabled        int       `json:"enabled,omitempty"`
+	CreateTime     time.Time `json:"createTime,omitempty"`
+	UpdateTime     time.Time `json:"updateTime,omitempty"`
 }
 
 // KnowledgeDocumentChunkLog 表示文档分块日志。
@@ -282,17 +284,19 @@ func (r *fileStoreRepository) LoadKnowledgeRecords() ([]KnowledgeBase, []Knowled
 	chunks := make([]KnowledgeChunk, 0, len(snapshot.KnowledgeChunks))
 	for _, item := range snapshot.KnowledgeChunks {
 		chunks = append(chunks, KnowledgeChunk{
-			ID:          item.ID,
-			KBID:        item.KBID,
-			DocID:       item.DocID,
-			ChunkIndex:  item.ChunkIndex,
-			Content:     item.Content,
-			ContentHash: item.ContentHash,
-			CharCount:   item.CharCount,
-			TokenCount:  item.TokenCount,
-			Enabled:     item.Enabled,
-			CreateTime:  item.CreateTime,
-			UpdateTime:  item.UpdateTime,
+			ID:             item.ID,
+			KBID:           item.KBID,
+			DocID:          item.DocID,
+			ChunkIndex:     item.ChunkIndex,
+			Content:        item.Content,
+			ContentHash:    item.ContentHash,
+			CharCount:      item.CharCount,
+			TokenCount:     item.TokenCount,
+			EmbeddingModel: item.EmbeddingModel,
+			Embedding:      cloneFloat64Slice(item.Embedding),
+			Enabled:        item.Enabled,
+			CreateTime:     item.CreateTime,
+			UpdateTime:     item.UpdateTime,
 		})
 	}
 	logs := make([]KnowledgeDocumentChunkLog, 0, len(snapshot.KnowledgeLogs))
@@ -368,17 +372,19 @@ func (r *fileStoreRepository) SaveKnowledgeRecords(bases []KnowledgeBase, docs [
 	chunkRecords := make([]platformstate.KnowledgeChunkRecord, 0, len(chunks))
 	for _, item := range chunks {
 		chunkRecords = append(chunkRecords, platformstate.KnowledgeChunkRecord{
-			ID:          item.ID,
-			KBID:        item.KBID,
-			DocID:       item.DocID,
-			ChunkIndex:  item.ChunkIndex,
-			Content:     item.Content,
-			ContentHash: item.ContentHash,
-			CharCount:   item.CharCount,
-			TokenCount:  item.TokenCount,
-			Enabled:     item.Enabled,
-			CreateTime:  item.CreateTime,
-			UpdateTime:  item.UpdateTime,
+			ID:             item.ID,
+			KBID:           item.KBID,
+			DocID:          item.DocID,
+			ChunkIndex:     item.ChunkIndex,
+			Content:        item.Content,
+			ContentHash:    item.ContentHash,
+			CharCount:      item.CharCount,
+			TokenCount:     item.TokenCount,
+			EmbeddingModel: item.EmbeddingModel,
+			Embedding:      cloneFloat64Slice(item.Embedding),
+			Enabled:        item.Enabled,
+			CreateTime:     item.CreateTime,
+			UpdateTime:     item.UpdateTime,
 		})
 	}
 	logRecords := make([]platformstate.KnowledgeChunkLogRecord, 0, len(logs))
@@ -908,7 +914,7 @@ func (s *Service) BuildPromptContext(_ context.Context, query string, limit int)
 		if !ok || !doc.Enabled {
 			continue
 		}
-		score := scoreKnowledgeMatch(needle, queryEmbedding, chunk.Content+" "+doc.DocName)
+		score := scoreKnowledgeChunk(needle, queryEmbedding, chunk, doc)
 		if !score.matched() {
 			continue
 		}
@@ -1068,6 +1074,8 @@ func (s *Service) UpdateChunk(docID, chunkID string, req KnowledgeChunkUpdateReq
 	chunk.CharCount = countChars(content)
 	chunk.TokenCount = estimateTokens(content)
 	chunk.KBID = doc.KBID
+	chunk.EmbeddingModel = s.embeddingModelForDocLocked(doc)
+	chunk.Embedding = embedText(content)
 	chunk.UpdateTime = s.now()
 	s.chunks[chunkID] = chunk
 	if err := s.persistLocked(); err != nil {
@@ -1164,21 +1172,30 @@ func (s *Service) createChunkLocked(doc KnowledgeDocument, req KnowledgeChunkCre
 		index = *req.Index
 	}
 	chunk := KnowledgeChunk{
-		ID:          chunkID,
-		KBID:        doc.KBID,
-		DocID:       doc.ID,
-		ChunkIndex:  index,
-		Content:     content,
-		ContentHash: buildContentHash(content),
-		CharCount:   countChars(content),
-		TokenCount:  estimateTokens(content),
-		Enabled:     1,
-		CreateTime:  now,
-		UpdateTime:  now,
+		ID:             chunkID,
+		KBID:           doc.KBID,
+		DocID:          doc.ID,
+		ChunkIndex:     index,
+		Content:        content,
+		ContentHash:    buildContentHash(content),
+		CharCount:      countChars(content),
+		TokenCount:     estimateTokens(content),
+		EmbeddingModel: s.embeddingModelForDocLocked(doc),
+		Embedding:      embedText(content),
+		Enabled:        1,
+		CreateTime:     now,
+		UpdateTime:     now,
 	}
 	s.chunks[chunk.ID] = chunk
 	s.updateDocumentChunkCountLocked(doc.ID)
 	return chunk, nil
+}
+
+func (s *Service) embeddingModelForDocLocked(doc KnowledgeDocument) string {
+	if kb, ok := s.knowledgeBases[doc.KBID]; ok {
+		return strings.TrimSpace(kb.EmbeddingModel)
+	}
+	return ""
 }
 
 func (s *Service) countDocumentsByKBLocked(kbID string) int {

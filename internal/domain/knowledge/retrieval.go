@@ -14,6 +14,22 @@ type retrievalScore struct {
 
 func scoreKnowledgeMatch(queryTokens []string, queryEmbedding []float64, text string) retrievalScore {
 	candidateTokens := tokenize(text)
+	return scoreKnowledgeTokens(queryTokens, queryEmbedding, candidateTokens)
+}
+
+func scoreKnowledgeChunk(queryTokens []string, queryEmbedding []float64, chunk KnowledgeChunk, doc KnowledgeDocument) retrievalScore {
+	contentTokens := tokenize(chunk.Content + " " + doc.DocName)
+	candidateEmbedding := chunk.Embedding
+	if len(candidateEmbedding) != localEmbeddingDimensions {
+		candidateEmbedding = embedText(chunk.Content)
+	}
+	return retrievalScore{
+		lexical: overlapScore(queryTokens, contentTokens),
+		vector:  cosineSimilarity(queryEmbedding, candidateEmbedding),
+	}
+}
+
+func scoreKnowledgeTokens(queryTokens []string, queryEmbedding []float64, candidateTokens []string) retrievalScore {
 	return retrievalScore{
 		lexical: overlapScore(queryTokens, candidateTokens),
 		vector:  cosineSimilarity(queryEmbedding, embedTokens(candidateTokens)),
@@ -101,4 +117,13 @@ func cosineSimilarity(left, right []float64) float64 {
 		dot += left[index] * right[index]
 	}
 	return dot
+}
+
+func cloneFloat64Slice(values []float64) []float64 {
+	if len(values) == 0 {
+		return nil
+	}
+	result := make([]float64, len(values))
+	copy(result, values)
+	return result
 }

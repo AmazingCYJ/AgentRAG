@@ -243,6 +243,8 @@ CREATE TABLE IF NOT EXISTS agentrag_knowledge_chunks (
     content_hash TEXT NOT NULL DEFAULT '',
     char_count INTEGER NOT NULL DEFAULT 0,
     token_count INTEGER NOT NULL DEFAULT 0,
+    embedding_model TEXT NOT NULL DEFAULT '',
+    embedding_vector TEXT NOT NULL DEFAULT '',
     enabled INTEGER NOT NULL DEFAULT 1,
     create_time TIMESTAMP NOT NULL,
     update_time TIMESTAMP NOT NULL

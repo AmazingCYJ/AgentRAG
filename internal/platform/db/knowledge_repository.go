@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"encoding/json"
 
 	domainknowledge "github.com/AmazingCYJ/AgentRAG/internal/domain/knowledge"
 )
@@ -62,6 +63,8 @@ func (r *SQLKnowledgeRepository) Bootstrap() error {
     content_hash TEXT NOT NULL DEFAULT '',
     char_count INTEGER NOT NULL DEFAULT 0,
     token_count INTEGER NOT NULL DEFAULT 0,
+    embedding_model TEXT NOT NULL DEFAULT '',
+    embedding_vector TEXT NOT NULL DEFAULT '',
     enabled INTEGER NOT NULL DEFAULT 1,
     create_time TIMESTAMP NOT NULL,
     update_time TIMESTAMP NOT NULL
@@ -94,6 +97,8 @@ func (r *SQLKnowledgeRepository) Bootstrap() error {
 	}
 	// 兼容已存在的早期本地库；列已存在时忽略错误。
 	_, _ = r.database.Exec(addColumnSQL(r.database.dialect, "agentrag_knowledge_documents", `text_content TEXT NOT NULL DEFAULT ''`))
+	_, _ = r.database.Exec(addColumnSQL(r.database.dialect, "agentrag_knowledge_chunks", `embedding_model TEXT NOT NULL DEFAULT ''`))
+	_, _ = r.database.Exec(addColumnSQL(r.database.dialect, "agentrag_knowledge_chunks", `embedding_vector TEXT NOT NULL DEFAULT ''`))
 	return nil
 }
 
@@ -188,7 +193,7 @@ ORDER BY create_time DESC`)
 func (r *SQLKnowledgeRepository) loadKnowledgeChunks() ([]domainknowledge.KnowledgeChunk, error) {
 	rows, err := r.database.Query(`
 SELECT id, kb_id, doc_id, chunk_index, content, content_hash, char_count, token_count,
-       enabled, create_time, update_time
+       embedding_model, embedding_vector, enabled, create_time, update_time
 FROM agentrag_knowledge_chunks
 ORDER BY doc_id ASC, chunk_index ASC`)
 	if err != nil {
@@ -199,9 +204,11 @@ ORDER BY doc_id ASC, chunk_index ASC`)
 	items := []domainknowledge.KnowledgeChunk{}
 	for rows.Next() {
 		var item domainknowledge.KnowledgeChunk
-		if err := rows.Scan(&item.ID, &item.KBID, &item.DocID, &item.ChunkIndex, &item.Content, &item.ContentHash, &item.CharCount, &item.TokenCount, &item.Enabled, &item.CreateTime, &item.UpdateTime); err != nil {
+		var embeddingVector string
+		if err := rows.Scan(&item.ID, &item.KBID, &item.DocID, &item.ChunkIndex, &item.Content, &item.ContentHash, &item.CharCount, &item.TokenCount, &item.EmbeddingModel, &embeddingVector, &item.Enabled, &item.CreateTime, &item.UpdateTime); err != nil {
 			return nil, err
 		}
+		item.Embedding = decodeEmbeddingVector(embeddingVector)
 		items = append(items, item)
 	}
 	return items, rows.Err()
@@ -411,8 +418,8 @@ func saveKnowledgeChunks(tx *SQLTx, items []domainknowledge.KnowledgeChunk) erro
 	stmt, err := tx.Prepare(`
 INSERT INTO agentrag_knowledge_chunks
     (id, kb_id, doc_id, chunk_index, content, content_hash, char_count, token_count,
-     enabled, create_time, update_time)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     embedding_model, embedding_vector, enabled, create_time, update_time)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (id) DO UPDATE SET
     kb_id = excluded.kb_id,
     doc_id = excluded.doc_id,
@@ -421,6 +428,8 @@ ON CONFLICT (id) DO UPDATE SET
     content_hash = excluded.content_hash,
     char_count = excluded.char_count,
     token_count = excluded.token_count,
+    embedding_model = excluded.embedding_model,
+    embedding_vector = excluded.embedding_vector,
     enabled = excluded.enabled,
     create_time = excluded.create_time,
     update_time = excluded.update_time`)
@@ -429,11 +438,33 @@ ON CONFLICT (id) DO UPDATE SET
 	}
 	defer stmt.Close()
 	for _, item := range items {
-		if _, err := stmt.Exec(item.ID, item.KBID, item.DocID, item.ChunkIndex, item.Content, item.ContentHash, item.CharCount, item.TokenCount, item.Enabled, normalizeTime(item.CreateTime), normalizeTime(item.UpdateTime)); err != nil {
+		if _, err := stmt.Exec(item.ID, item.KBID, item.DocID, item.ChunkIndex, item.Content, item.ContentHash, item.CharCount, item.TokenCount, item.EmbeddingModel, encodeEmbeddingVector(item.Embedding), item.Enabled, normalizeTime(item.CreateTime), normalizeTime(item.UpdateTime)); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func encodeEmbeddingVector(values []float64) string {
+	if len(values) == 0 {
+		return ""
+	}
+	content, err := json.Marshal(values)
+	if err != nil {
+		return ""
+	}
+	return string(content)
+}
+
+func decodeEmbeddingVector(content string) []float64 {
+	if content == "" {
+		return nil
+	}
+	var values []float64
+	if err := json.Unmarshal([]byte(content), &values); err != nil {
+		return nil
+	}
+	return values
 }
 
 func saveKnowledgeLogs(tx *SQLTx, items []domainknowledge.KnowledgeDocumentChunkLog) error {

@@ -105,17 +105,19 @@ type KnowledgeDocumentRecord struct {
 
 // KnowledgeChunkRecord 定义持久化到磁盘的 Chunk 记录。
 type KnowledgeChunkRecord struct {
-	ID          string    `json:"id"`
-	KBID        string    `json:"kbId,omitempty"`
-	DocID       string    `json:"docId"`
-	ChunkIndex  int       `json:"chunkIndex,omitempty"`
-	Content     string    `json:"content,omitempty"`
-	ContentHash string    `json:"contentHash,omitempty"`
-	CharCount   int       `json:"charCount,omitempty"`
-	TokenCount  int       `json:"tokenCount,omitempty"`
-	Enabled     int       `json:"enabled,omitempty"`
-	CreateTime  time.Time `json:"createTime,omitempty"`
-	UpdateTime  time.Time `json:"updateTime,omitempty"`
+	ID             string    `json:"id"`
+	KBID           string    `json:"kbId,omitempty"`
+	DocID          string    `json:"docId"`
+	ChunkIndex     int       `json:"chunkIndex,omitempty"`
+	Content        string    `json:"content,omitempty"`
+	ContentHash    string    `json:"contentHash,omitempty"`
+	CharCount      int       `json:"charCount,omitempty"`
+	TokenCount     int       `json:"tokenCount,omitempty"`
+	EmbeddingModel string    `json:"embeddingModel,omitempty"`
+	Embedding      []float64 `json:"embedding,omitempty"`
+	Enabled        int       `json:"enabled,omitempty"`
+	CreateTime     time.Time `json:"createTime,omitempty"`
+	UpdateTime     time.Time `json:"updateTime,omitempty"`
 }
 
 // KnowledgeChunkLogRecord 定义持久化到磁盘的文档分块日志记录。

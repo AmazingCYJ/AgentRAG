@@ -180,7 +180,7 @@ func TestPostgresRepositoryBootstrapSmoke(t *testing.T) {
 			{ID: "doc_pg", KBID: "kb_pg", DocName: "PostgreSQL 文档", SourceType: "file", SourceLocation: "pg.md", TextContent: "PostgreSQL 文档正文", Enabled: true, ChunkCount: 1, FileURL: "memory://pg", FileType: "md", FileSize: 100, ProcessMode: "chunk", ChunkStrategy: "fixed_size", ChunkConfig: "{}", PipelineID: "pipe_pg", Status: "pending", CreatedBy: "admin", UpdatedBy: "admin", CreateTime: now, UpdateTime: now},
 		},
 		[]domainknowledge.KnowledgeChunk{
-			{ID: "chunk_pg", KBID: "kb_pg", DocID: "doc_pg", ChunkIndex: 0, Content: "PostgreSQL Chunk", ContentHash: "pg-hash", CharCount: 16, TokenCount: 3, Enabled: 1, CreateTime: now, UpdateTime: now},
+			{ID: "chunk_pg", KBID: "kb_pg", DocID: "doc_pg", ChunkIndex: 0, Content: "PostgreSQL Chunk", ContentHash: "pg-hash", CharCount: 16, TokenCount: 3, EmbeddingModel: "embedding", Embedding: []float64{0.1, 0.2}, Enabled: 1, CreateTime: now, UpdateTime: now},
 		},
 		[]domainknowledge.KnowledgeDocumentChunkLog{
 			{ID: "log_pg", DocID: "doc_pg", Status: "pending", ProcessMode: "chunk", ChunkStrategy: "fixed_size", PipelineID: "pipe_pg", PipelineName: "pipe_pg", TotalDuration: 80, ChunkCount: 1, StartTime: now, EndTime: now.Add(80 * time.Millisecond), CreateTime: now},
@@ -196,7 +196,7 @@ func TestPostgresRepositoryBootstrapSmoke(t *testing.T) {
 			{ID: "doc_pg", KBID: "kb_pg", DocName: "PostgreSQL 文档更新", SourceType: "file", SourceLocation: "pg.md", TextContent: "PostgreSQL 文档正文更新", Enabled: false, ChunkCount: 1, FileURL: "memory://pg", FileType: "md", FileSize: 120, ProcessMode: "chunk", ChunkStrategy: "structure_aware", ChunkConfig: "{}", PipelineID: "pipe_pg", Status: "success", CreatedBy: "admin", UpdatedBy: "admin", CreateTime: now, UpdateTime: now.Add(time.Minute)},
 		},
 		[]domainknowledge.KnowledgeChunk{
-			{ID: "chunk_pg", KBID: "kb_pg", DocID: "doc_pg", ChunkIndex: 1, Content: "PostgreSQL Chunk 更新", ContentHash: "pg-hash-new", CharCount: 19, TokenCount: 4, Enabled: 0, CreateTime: now, UpdateTime: now.Add(time.Minute)},
+			{ID: "chunk_pg", KBID: "kb_pg", DocID: "doc_pg", ChunkIndex: 1, Content: "PostgreSQL Chunk 更新", ContentHash: "pg-hash-new", CharCount: 19, TokenCount: 4, EmbeddingModel: "embedding-v2", Embedding: []float64{0.3, 0.4, 0.5}, Enabled: 0, CreateTime: now, UpdateTime: now.Add(time.Minute)},
 		},
 		[]domainknowledge.KnowledgeDocumentChunkLog{
 			{ID: "log_pg", DocID: "doc_pg", Status: "success", ProcessMode: "chunk", ChunkStrategy: "structure_aware", PipelineID: "pipe_pg", PipelineName: "pipe_pg", TotalDuration: 120, ChunkCount: 1, StartTime: now, EndTime: now.Add(120 * time.Millisecond), CreateTime: now},
@@ -208,7 +208,7 @@ func TestPostgresRepositoryBootstrapSmoke(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load postgres knowledge records failed: %v", err)
 	}
-	if len(bases) != 1 || bases[0].Name != "PostgreSQL 知识库更新" || len(docs) != 1 || docs[0].DocName != "PostgreSQL 文档更新" || docs[0].Enabled || len(chunks) != 1 || chunks[0].Enabled != 0 || len(logs) != 1 || logs[0].Status != "success" {
+	if len(bases) != 1 || bases[0].Name != "PostgreSQL 知识库更新" || len(docs) != 1 || docs[0].DocName != "PostgreSQL 文档更新" || docs[0].Enabled || len(chunks) != 1 || chunks[0].Enabled != 0 || chunks[0].EmbeddingModel != "embedding-v2" || len(chunks[0].Embedding) != 3 || chunks[0].Embedding[2] != 0.5 || len(logs) != 1 || logs[0].Status != "success" {
 		t.Fatalf("unexpected postgres knowledge records bases=%#v docs=%#v chunks=%#v logs=%#v", bases, docs, chunks, logs)
 	}
 
