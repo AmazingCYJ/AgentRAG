@@ -190,6 +190,56 @@ func TestBuildPromptContextMatchesBusinessSynonyms(t *testing.T) {
 	}
 }
 
+func TestBuildPromptContextUsesVectorSimilarityForTiedKeywordMatches(t *testing.T) {
+	service := NewService(nil)
+	kbID, err := service.CreateKnowledgeBase(KnowledgeBaseCreateRequest{
+		Name:           "财务知识库",
+		EmbeddingModel: "embedding-local-bge",
+		CollectionName: "finance_docs",
+		CreatedBy:      "admin",
+	})
+	if err != nil {
+		t.Fatalf("create knowledge base failed: %v", err)
+	}
+	noisyDoc, err := service.UploadDocument(kbID, KnowledgeDocumentUploadRequest{
+		SourceType: "file",
+		FileName:   "A噪声说明.md",
+	}, "admin")
+	if err != nil {
+		t.Fatalf("upload noisy document failed: %v", err)
+	}
+	_, err = service.CreateChunk(noisyDoc.ID, KnowledgeChunkCreateRequest{
+		Content: "报销流程 发票 账号 密码 登录 审批人 通知 配置 表单 字段 权限 菜单 角色 同步 导出",
+	})
+	if err != nil {
+		t.Fatalf("create noisy chunk failed: %v", err)
+	}
+	focusedDoc, err := service.UploadDocument(kbID, KnowledgeDocumentUploadRequest{
+		SourceType: "file",
+		FileName:   "Z报销指南.md",
+	}, "admin")
+	if err != nil {
+		t.Fatalf("upload focused document failed: %v", err)
+	}
+	_, err = service.CreateChunk(focusedDoc.ID, KnowledgeChunkCreateRequest{
+		Content: "报销流程 发票",
+	})
+	if err != nil {
+		t.Fatalf("create focused chunk failed: %v", err)
+	}
+
+	contextText, err := service.BuildPromptContext(nil, "报销流程 发票", 1)
+	if err != nil {
+		t.Fatalf("build prompt context failed: %v", err)
+	}
+	if !strings.Contains(contextText, "Z报销指南.md") || !strings.Contains(contextText, "报销流程 发票") {
+		t.Fatalf("expected vector similarity to prefer focused chunk, got %s", contextText)
+	}
+	if strings.Contains(contextText, "A噪声说明.md") {
+		t.Fatalf("expected noisy chunk to be ranked below focused chunk, got %s", contextText)
+	}
+}
+
 func TestSearchDocumentsMatchesBusinessSynonyms(t *testing.T) {
 	service := NewService(nil)
 	kbID, err := service.CreateKnowledgeBase(KnowledgeBaseCreateRequest{

@@ -837,18 +837,19 @@ func (s *Service) SearchDocuments(keyword string, limit int) []KnowledgeDocument
 	}
 	keyword = strings.TrimSpace(keyword)
 	queryTokens := tokenize(keyword)
+	queryEmbedding := embedText(keyword)
 
 	type scoredDocument struct {
 		item  KnowledgeDocumentSearchItem
-		score int
+		score retrievalScore
 	}
 
 	filtered := make([]scoredDocument, 0, limit)
 	for _, item := range s.documents {
-		score := 1
+		score := retrievalScore{lexical: 1}
 		if keyword != "" {
-			score = overlapScore(queryTokens, tokenize(item.DocName+" "+item.SourceLocation))
-			if score <= 0 {
+			score = scoreKnowledgeMatch(queryTokens, queryEmbedding, item.DocName+" "+item.SourceLocation)
+			if !score.matched() {
 				continue
 			}
 		}
@@ -863,10 +864,10 @@ func (s *Service) SearchDocuments(keyword string, limit int) []KnowledgeDocument
 		})
 	}
 	sort.Slice(filtered, func(i, j int) bool {
-		if filtered[i].score == filtered[j].score {
+		if compareRetrievalScore(filtered[i].score, filtered[j].score) == 0 {
 			return filtered[i].item.DocName < filtered[j].item.DocName
 		}
-		return filtered[i].score > filtered[j].score
+		return compareRetrievalScore(filtered[i].score, filtered[j].score) > 0
 	})
 	if len(filtered) > limit {
 		filtered = filtered[:limit]
@@ -887,6 +888,7 @@ func (s *Service) BuildPromptContext(_ context.Context, query string, limit int)
 	if len(needle) == 0 {
 		return "", nil
 	}
+	queryEmbedding := embedText(query)
 
 	type scoredChunk struct {
 		kbName     string
@@ -894,7 +896,7 @@ func (s *Service) BuildPromptContext(_ context.Context, query string, limit int)
 		source     string
 		chunkIndex int
 		content    string
-		score      int
+		score      retrievalScore
 	}
 
 	matches := make([]scoredChunk, 0)
@@ -906,8 +908,8 @@ func (s *Service) BuildPromptContext(_ context.Context, query string, limit int)
 		if !ok || !doc.Enabled {
 			continue
 		}
-		score := overlapScore(needle, tokenize(chunk.Content+" "+doc.DocName))
-		if score <= 0 {
+		score := scoreKnowledgeMatch(needle, queryEmbedding, chunk.Content+" "+doc.DocName)
+		if !score.matched() {
 			continue
 		}
 		kbName := ""
@@ -925,10 +927,13 @@ func (s *Service) BuildPromptContext(_ context.Context, query string, limit int)
 	}
 
 	sort.Slice(matches, func(i, j int) bool {
-		if matches[i].score == matches[j].score {
+		if compareRetrievalScore(matches[i].score, matches[j].score) == 0 {
+			if matches[i].docName == matches[j].docName {
+				return matches[i].chunkIndex < matches[j].chunkIndex
+			}
 			return matches[i].docName < matches[j].docName
 		}
-		return matches[i].score > matches[j].score
+		return compareRetrievalScore(matches[i].score, matches[j].score) > 0
 	})
 
 	if limit <= 0 {
