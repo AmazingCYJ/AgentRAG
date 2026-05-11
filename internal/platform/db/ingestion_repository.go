@@ -3,6 +3,8 @@ package db
 import (
 	"database/sql"
 	"encoding/json"
+	"strconv"
+	"strings"
 
 	domainingestion "github.com/AmazingCYJ/AgentRAG/internal/domain/ingestion"
 )
@@ -235,20 +237,57 @@ ORDER BY task_id ASC, node_order ASC`)
 
 // SaveIngestionRecords 覆盖保存当前采集数据。
 func (r *SQLIngestionRepository) SaveIngestionRecords(pipelines []domainingestion.Pipeline, tasks []domainingestion.Task, taskNodes []domainingestion.TaskNode) error {
+	pipelineIDs := make([]string, 0, len(pipelines))
+	pipelineNodeKeys := make([]ingestionPipelineNodeKey, 0)
+	pipelineNodeIDs := make([]string, 0)
+	for _, pipeline := range pipelines {
+		pipelineIDs = append(pipelineIDs, pipeline.ID)
+		for _, node := range pipeline.Nodes {
+			key := ingestionPipelineNodeKey{pipelineID: pipeline.ID, nodeID: node.ID}
+			pipelineNodeKeys = append(pipelineNodeKeys, key)
+			pipelineNodeIDs = append(pipelineNodeIDs, key.String())
+		}
+	}
+	if err := rejectDuplicateIDs(pipelineIDs); err != nil {
+		return err
+	}
+	if err := rejectDuplicateIDs(pipelineNodeIDs); err != nil {
+		return err
+	}
+	taskIDs := make([]string, 0, len(tasks))
+	for _, task := range tasks {
+		taskIDs = append(taskIDs, task.ID)
+	}
+	if err := rejectDuplicateIDs(taskIDs); err != nil {
+		return err
+	}
+	taskNodeIDs := make([]string, 0, len(taskNodes))
+	for _, node := range taskNodes {
+		taskNodeIDs = append(taskNodeIDs, node.ID)
+	}
+	if err := rejectDuplicateIDs(taskNodeIDs); err != nil {
+		return err
+	}
+
 	tx, err := r.database.Begin()
 	if err != nil {
 		return err
 	}
-	for _, statement := range []string{
-		`DELETE FROM agentrag_ingestion_task_nodes`,
-		`DELETE FROM agentrag_ingestion_tasks`,
-		`DELETE FROM agentrag_ingestion_pipeline_nodes`,
-		`DELETE FROM agentrag_ingestion_pipelines`,
-	} {
-		if _, err := tx.Exec(statement); err != nil {
-			_ = tx.Rollback()
-			return err
-		}
+	if err := deleteMissingRows(tx, "agentrag_ingestion_task_nodes", "id", taskNodeIDs); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if err := deleteMissingRows(tx, "agentrag_ingestion_tasks", "id", taskIDs); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if err := deleteMissingIngestionPipelineNodes(tx, pipelineNodeKeys); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if err := deleteMissingRows(tx, "agentrag_ingestion_pipelines", "id", pipelineIDs); err != nil {
+		_ = tx.Rollback()
+		return err
 	}
 	if err := saveIngestionPipelines(tx, pipelines); err != nil {
 		_ = tx.Rollback()
@@ -265,11 +304,47 @@ func (r *SQLIngestionRepository) SaveIngestionRecords(pipelines []domainingestio
 	return tx.Commit()
 }
 
+type ingestionPipelineNodeKey struct {
+	pipelineID string
+	nodeID     int64
+}
+
+func (k ingestionPipelineNodeKey) String() string {
+	return k.pipelineID + "|" + strconv.FormatInt(k.nodeID, 10)
+}
+
+func deleteMissingIngestionPipelineNodes(tx *SQLTx, keys []ingestionPipelineNodeKey) error {
+	if len(keys) == 0 {
+		_, err := tx.Exec(`DELETE FROM agentrag_ingestion_pipeline_nodes`)
+		return err
+	}
+
+	var builder strings.Builder
+	builder.WriteString(`DELETE FROM agentrag_ingestion_pipeline_nodes WHERE NOT (`)
+	args := make([]any, 0, len(keys)*2)
+	for index, key := range keys {
+		if index > 0 {
+			builder.WriteString(` OR `)
+		}
+		builder.WriteString(`(pipeline_id = ? AND id = ?)`)
+		args = append(args, key.pipelineID, key.nodeID)
+	}
+	builder.WriteString(`)`)
+	_, err := tx.Exec(builder.String(), args...)
+	return err
+}
+
 func saveIngestionPipelines(tx *SQLTx, pipelines []domainingestion.Pipeline) error {
 	pipelineStmt, err := tx.Prepare(`
 INSERT INTO agentrag_ingestion_pipelines
     (id, name, description, created_by, create_time, update_time)
-VALUES (?, ?, ?, ?, ?, ?)`)
+VALUES (?, ?, ?, ?, ?, ?)
+ON CONFLICT (id) DO UPDATE SET
+    name = excluded.name,
+    description = excluded.description,
+    created_by = excluded.created_by,
+    create_time = excluded.create_time,
+    update_time = excluded.update_time`)
 	if err != nil {
 		return err
 	}
@@ -278,7 +353,14 @@ VALUES (?, ?, ?, ?, ?, ?)`)
 	nodeStmt, err := tx.Prepare(`
 INSERT INTO agentrag_ingestion_pipeline_nodes
     (id, pipeline_id, node_id, node_type, settings, condition_json, next_node_id, node_order)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (pipeline_id, id) DO UPDATE SET
+    node_id = excluded.node_id,
+    node_type = excluded.node_type,
+    settings = excluded.settings,
+    condition_json = excluded.condition_json,
+    next_node_id = excluded.next_node_id,
+    node_order = excluded.node_order`)
 	if err != nil {
 		return err
 	}
@@ -318,7 +400,22 @@ func saveIngestionTasks(tx *SQLTx, tasks []domainingestion.Task) error {
 INSERT INTO agentrag_ingestion_tasks
     (id, pipeline_id, source_type, source_location, source_file_name, status, chunk_count,
      error_message, logs, metadata, started_at, completed_at, created_by, create_time, update_time)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (id) DO UPDATE SET
+    pipeline_id = excluded.pipeline_id,
+    source_type = excluded.source_type,
+    source_location = excluded.source_location,
+    source_file_name = excluded.source_file_name,
+    status = excluded.status,
+    chunk_count = excluded.chunk_count,
+    error_message = excluded.error_message,
+    logs = excluded.logs,
+    metadata = excluded.metadata,
+    started_at = excluded.started_at,
+    completed_at = excluded.completed_at,
+    created_by = excluded.created_by,
+    create_time = excluded.create_time,
+    update_time = excluded.update_time`)
 	if err != nil {
 		return err
 	}
@@ -353,7 +450,20 @@ func saveIngestionTaskNodes(tx *SQLTx, nodes []domainingestion.TaskNode) error {
 INSERT INTO agentrag_ingestion_task_nodes
     (id, task_id, pipeline_id, node_id, node_type, node_order, status, duration_ms,
      message, error_message, output, create_time, update_time)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (id) DO UPDATE SET
+    task_id = excluded.task_id,
+    pipeline_id = excluded.pipeline_id,
+    node_id = excluded.node_id,
+    node_type = excluded.node_type,
+    node_order = excluded.node_order,
+    status = excluded.status,
+    duration_ms = excluded.duration_ms,
+    message = excluded.message,
+    error_message = excluded.error_message,
+    output = excluded.output,
+    create_time = excluded.create_time,
+    update_time = excluded.update_time`)
 	if err != nil {
 		return err
 	}

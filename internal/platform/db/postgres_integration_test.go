@@ -8,6 +8,7 @@ import (
 	"time"
 
 	domainconversation "github.com/AmazingCYJ/AgentRAG/internal/domain/conversation"
+	domainingestion "github.com/AmazingCYJ/AgentRAG/internal/domain/ingestion"
 	domainknowledge "github.com/AmazingCYJ/AgentRAG/internal/domain/knowledge"
 	domainragtrace "github.com/AmazingCYJ/AgentRAG/internal/domain/ragtrace"
 	domainusermgmt "github.com/AmazingCYJ/AgentRAG/internal/domain/usermgmt"
@@ -182,6 +183,53 @@ func TestPostgresRepositoryBootstrapSmoke(t *testing.T) {
 	}
 	if len(bases) != 1 || bases[0].Name != "PostgreSQL 知识库更新" || len(docs) != 1 || docs[0].DocName != "PostgreSQL 文档更新" || docs[0].Enabled || len(chunks) != 1 || chunks[0].Enabled != 0 || len(logs) != 1 || logs[0].Status != "success" {
 		t.Fatalf("unexpected postgres knowledge records bases=%#v docs=%#v chunks=%#v logs=%#v", bases, docs, chunks, logs)
+	}
+
+	ingestionRepository := NewSQLIngestionRepository(database)
+	if err := ingestionRepository.SaveIngestionRecords(
+		[]domainingestion.Pipeline{
+			{
+				ID: "pipe_pg", Name: "PostgreSQL Pipeline", Description: "postgres smoke", CreatedBy: "admin", CreateTime: now, UpdateTime: now,
+				Nodes: []domainingestion.PipelineNode{
+					{ID: 1, NodeID: "fetcher", NodeType: "fetcher", Settings: map[string]any{"timeoutMs": float64(1000)}, NextNodeID: "parser"},
+					{ID: 2, NodeID: "parser", NodeType: "parser"},
+				},
+			},
+		},
+		[]domainingestion.Task{
+			{ID: "task_pg", PipelineID: "pipe_pg", SourceType: "url", SourceLocation: "https://example.com/pg", SourceFileName: "pg.md", Status: "running", ChunkCount: 1, Logs: []domainingestion.TaskLog{{NodeID: "fetcher", NodeType: "fetcher", Message: "fetched", DurationMs: 10, Success: true}}, Metadata: map[string]any{"version": float64(1)}, StartedAt: now, CompletedAt: now.Add(10 * time.Millisecond), CreatedBy: "admin", CreateTime: now, UpdateTime: now},
+		},
+		[]domainingestion.TaskNode{
+			{ID: "tasknode_pg", TaskID: "task_pg", PipelineID: "pipe_pg", NodeID: "fetcher", NodeType: "fetcher", NodeOrder: 1, Status: "running", DurationMs: 10, Message: "fetching", Output: map[string]any{"nextNodeId": "parser"}, CreateTime: now, UpdateTime: now},
+		},
+	); err != nil {
+		t.Fatalf("save postgres ingestion records failed: %v", err)
+	}
+	if err := ingestionRepository.SaveIngestionRecords(
+		[]domainingestion.Pipeline{
+			{
+				ID: "pipe_pg", Name: "PostgreSQL Pipeline Updated", Description: "postgres smoke updated", CreatedBy: "admin", CreateTime: now, UpdateTime: now.Add(time.Minute),
+				Nodes: []domainingestion.PipelineNode{
+					{ID: 2, NodeID: "parser", NodeType: "parser-v2", Settings: map[string]any{"format": "markdown"}},
+					{ID: 3, NodeID: "embedder", NodeType: "embedder"},
+				},
+			},
+		},
+		[]domainingestion.Task{
+			{ID: "task_pg", PipelineID: "pipe_pg", SourceType: "url", SourceLocation: "https://example.com/pg-updated", SourceFileName: "pg.md", Status: "failed", ChunkCount: 2, ErrorMessage: "timeout", Logs: []domainingestion.TaskLog{{NodeID: "parser", NodeType: "parser-v2", Message: "parsed", DurationMs: 20, Success: false, Error: "timeout"}}, Metadata: map[string]any{"version": float64(2)}, StartedAt: now, CompletedAt: now.Add(20 * time.Millisecond), CreatedBy: "admin", CreateTime: now, UpdateTime: now.Add(time.Minute)},
+		},
+		[]domainingestion.TaskNode{
+			{ID: "tasknode_pg", TaskID: "task_pg", PipelineID: "pipe_pg", NodeID: "parser", NodeType: "parser-v2", NodeOrder: 2, Status: "failed", DurationMs: 20, Message: "parsed", ErrorMessage: "timeout", Output: map[string]any{"nextNodeId": "embedder"}, CreateTime: now, UpdateTime: now.Add(time.Minute)},
+		},
+	); err != nil {
+		t.Fatalf("update postgres ingestion records failed: %v", err)
+	}
+	pipelines, ingestionTasks, ingestionTaskNodes, err := ingestionRepository.LoadIngestionRecords()
+	if err != nil {
+		t.Fatalf("load postgres ingestion records failed: %v", err)
+	}
+	if len(pipelines) != 1 || pipelines[0].Name != "PostgreSQL Pipeline Updated" || len(pipelines[0].Nodes) != 2 || pipelines[0].Nodes[0].ID != 2 || pipelines[0].Nodes[0].NodeType != "parser-v2" || len(ingestionTasks) != 1 || ingestionTasks[0].Status != "failed" || ingestionTasks[0].Metadata["version"] != float64(2) || len(ingestionTaskNodes) != 1 || ingestionTaskNodes[0].Status != "failed" || ingestionTaskNodes[0].Output["nextNodeId"] != "embedder" {
+		t.Fatalf("unexpected postgres ingestion records pipelines=%#v tasks=%#v taskNodes=%#v", pipelines, ingestionTasks, ingestionTaskNodes)
 	}
 }
 
