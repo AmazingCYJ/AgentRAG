@@ -251,17 +251,50 @@ ORDER BY doc_id ASC, create_time DESC`)
 
 // SaveKnowledgeRecords 覆盖保存当前知识库数据。
 func (r *SQLKnowledgeRepository) SaveKnowledgeRecords(bases []domainknowledge.KnowledgeBase, docs []domainknowledge.KnowledgeDocument, chunks []domainknowledge.KnowledgeChunk, logs []domainknowledge.KnowledgeDocumentChunkLog) error {
+	baseIDs := make([]string, 0, len(bases))
+	for _, item := range bases {
+		baseIDs = append(baseIDs, item.ID)
+	}
+	if err := rejectDuplicateIDs(baseIDs); err != nil {
+		return err
+	}
+	docIDs := make([]string, 0, len(docs))
+	for _, item := range docs {
+		docIDs = append(docIDs, item.ID)
+	}
+	if err := rejectDuplicateIDs(docIDs); err != nil {
+		return err
+	}
+	chunkIDs := make([]string, 0, len(chunks))
+	for _, item := range chunks {
+		chunkIDs = append(chunkIDs, item.ID)
+	}
+	if err := rejectDuplicateIDs(chunkIDs); err != nil {
+		return err
+	}
+	logIDs := make([]string, 0, len(logs))
+	for _, item := range logs {
+		logIDs = append(logIDs, item.ID)
+	}
+	if err := rejectDuplicateIDs(logIDs); err != nil {
+		return err
+	}
+
 	tx, err := r.database.Begin()
 	if err != nil {
 		return err
 	}
-	for _, statement := range []string{
-		`DELETE FROM agentrag_knowledge_chunk_logs`,
-		`DELETE FROM agentrag_knowledge_chunks`,
-		`DELETE FROM agentrag_knowledge_documents`,
-		`DELETE FROM agentrag_knowledge_bases`,
-	} {
-		if _, err := tx.Exec(statement); err != nil {
+	deleteSteps := []struct {
+		tableName string
+		ids       []string
+	}{
+		{tableName: "agentrag_knowledge_chunk_logs", ids: logIDs},
+		{tableName: "agentrag_knowledge_chunks", ids: chunkIDs},
+		{tableName: "agentrag_knowledge_documents", ids: docIDs},
+		{tableName: "agentrag_knowledge_bases", ids: baseIDs},
+	}
+	for _, deleteStep := range deleteSteps {
+		if err := deleteMissingRows(tx, deleteStep.tableName, "id", deleteStep.ids); err != nil {
 			_ = tx.Rollback()
 			return err
 		}
@@ -289,7 +322,15 @@ func saveKnowledgeBases(tx *SQLTx, items []domainknowledge.KnowledgeBase) error 
 	stmt, err := tx.Prepare(`
 INSERT INTO agentrag_knowledge_bases
     (id, name, embedding_model, collection_name, created_by, document_count, create_time, update_time)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (id) DO UPDATE SET
+    name = excluded.name,
+    embedding_model = excluded.embedding_model,
+    collection_name = excluded.collection_name,
+    created_by = excluded.created_by,
+    document_count = excluded.document_count,
+    create_time = excluded.create_time,
+    update_time = excluded.update_time`)
 	if err != nil {
 		return err
 	}
@@ -308,7 +349,29 @@ INSERT INTO agentrag_knowledge_documents
     (id, kb_id, doc_name, source_type, source_location, text_content, schedule_enabled, schedule_cron,
      enabled, chunk_count, file_url, file_type, file_size, process_mode, chunk_strategy,
      chunk_config, pipeline_id, status, created_by, updated_by, create_time, update_time)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (id) DO UPDATE SET
+    kb_id = excluded.kb_id,
+    doc_name = excluded.doc_name,
+    source_type = excluded.source_type,
+    source_location = excluded.source_location,
+    text_content = excluded.text_content,
+    schedule_enabled = excluded.schedule_enabled,
+    schedule_cron = excluded.schedule_cron,
+    enabled = excluded.enabled,
+    chunk_count = excluded.chunk_count,
+    file_url = excluded.file_url,
+    file_type = excluded.file_type,
+    file_size = excluded.file_size,
+    process_mode = excluded.process_mode,
+    chunk_strategy = excluded.chunk_strategy,
+    chunk_config = excluded.chunk_config,
+    pipeline_id = excluded.pipeline_id,
+    status = excluded.status,
+    created_by = excluded.created_by,
+    updated_by = excluded.updated_by,
+    create_time = excluded.create_time,
+    update_time = excluded.update_time`)
 	if err != nil {
 		return err
 	}
@@ -349,7 +412,18 @@ func saveKnowledgeChunks(tx *SQLTx, items []domainknowledge.KnowledgeChunk) erro
 INSERT INTO agentrag_knowledge_chunks
     (id, kb_id, doc_id, chunk_index, content, content_hash, char_count, token_count,
      enabled, create_time, update_time)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (id) DO UPDATE SET
+    kb_id = excluded.kb_id,
+    doc_id = excluded.doc_id,
+    chunk_index = excluded.chunk_index,
+    content = excluded.content,
+    content_hash = excluded.content_hash,
+    char_count = excluded.char_count,
+    token_count = excluded.token_count,
+    enabled = excluded.enabled,
+    create_time = excluded.create_time,
+    update_time = excluded.update_time`)
 	if err != nil {
 		return err
 	}
@@ -368,7 +442,25 @@ INSERT INTO agentrag_knowledge_chunk_logs
     (id, doc_id, status, process_mode, chunk_strategy, pipeline_id, pipeline_name,
      extract_duration, chunk_duration, embed_duration, persist_duration, other_duration,
      total_duration, chunk_count, error_message, start_time, end_time, create_time)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (id) DO UPDATE SET
+    doc_id = excluded.doc_id,
+    status = excluded.status,
+    process_mode = excluded.process_mode,
+    chunk_strategy = excluded.chunk_strategy,
+    pipeline_id = excluded.pipeline_id,
+    pipeline_name = excluded.pipeline_name,
+    extract_duration = excluded.extract_duration,
+    chunk_duration = excluded.chunk_duration,
+    embed_duration = excluded.embed_duration,
+    persist_duration = excluded.persist_duration,
+    other_duration = excluded.other_duration,
+    total_duration = excluded.total_duration,
+    chunk_count = excluded.chunk_count,
+    error_message = excluded.error_message,
+    start_time = excluded.start_time,
+    end_time = excluded.end_time,
+    create_time = excluded.create_time`)
 	if err != nil {
 		return err
 	}

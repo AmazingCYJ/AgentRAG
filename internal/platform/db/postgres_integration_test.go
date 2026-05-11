@@ -8,6 +8,7 @@ import (
 	"time"
 
 	domainconversation "github.com/AmazingCYJ/AgentRAG/internal/domain/conversation"
+	domainknowledge "github.com/AmazingCYJ/AgentRAG/internal/domain/knowledge"
 	domainragtrace "github.com/AmazingCYJ/AgentRAG/internal/domain/ragtrace"
 	domainusermgmt "github.com/AmazingCYJ/AgentRAG/internal/domain/usermgmt"
 )
@@ -140,6 +141,47 @@ func TestPostgresRepositoryBootstrapSmoke(t *testing.T) {
 	}
 	if len(runs) != 1 || runs[0].TraceName != "PostgreSQL Trace Updated" || runs[0].Status != "FAILED" || len(nodes) != 1 || nodes[0].NodeType != "RETRIEVER" || nodes[0].Status != "FAILED" {
 		t.Fatalf("unexpected postgres trace records runs=%#v nodes=%#v", runs, nodes)
+	}
+
+	knowledgeRepository := NewSQLKnowledgeRepository(database)
+	if err := knowledgeRepository.SaveKnowledgeRecords(
+		[]domainknowledge.KnowledgeBase{
+			{ID: "kb_pg", Name: "PostgreSQL 知识库", EmbeddingModel: "embedding", CollectionName: "pg_collection", CreatedBy: "admin", DocumentCount: 1, CreateTime: now, UpdateTime: now},
+		},
+		[]domainknowledge.KnowledgeDocument{
+			{ID: "doc_pg", KBID: "kb_pg", DocName: "PostgreSQL 文档", SourceType: "file", SourceLocation: "pg.md", TextContent: "PostgreSQL 文档正文", Enabled: true, ChunkCount: 1, FileURL: "memory://pg", FileType: "md", FileSize: 100, ProcessMode: "chunk", ChunkStrategy: "fixed_size", ChunkConfig: "{}", PipelineID: "pipe_pg", Status: "pending", CreatedBy: "admin", UpdatedBy: "admin", CreateTime: now, UpdateTime: now},
+		},
+		[]domainknowledge.KnowledgeChunk{
+			{ID: "chunk_pg", KBID: "kb_pg", DocID: "doc_pg", ChunkIndex: 0, Content: "PostgreSQL Chunk", ContentHash: "pg-hash", CharCount: 16, TokenCount: 3, Enabled: 1, CreateTime: now, UpdateTime: now},
+		},
+		[]domainknowledge.KnowledgeDocumentChunkLog{
+			{ID: "log_pg", DocID: "doc_pg", Status: "pending", ProcessMode: "chunk", ChunkStrategy: "fixed_size", PipelineID: "pipe_pg", PipelineName: "pipe_pg", TotalDuration: 80, ChunkCount: 1, StartTime: now, EndTime: now.Add(80 * time.Millisecond), CreateTime: now},
+		},
+	); err != nil {
+		t.Fatalf("save postgres knowledge records failed: %v", err)
+	}
+	if err := knowledgeRepository.SaveKnowledgeRecords(
+		[]domainknowledge.KnowledgeBase{
+			{ID: "kb_pg", Name: "PostgreSQL 知识库更新", EmbeddingModel: "embedding-v2", CollectionName: "pg_collection", CreatedBy: "admin", DocumentCount: 1, CreateTime: now, UpdateTime: now.Add(time.Minute)},
+		},
+		[]domainknowledge.KnowledgeDocument{
+			{ID: "doc_pg", KBID: "kb_pg", DocName: "PostgreSQL 文档更新", SourceType: "file", SourceLocation: "pg.md", TextContent: "PostgreSQL 文档正文更新", Enabled: false, ChunkCount: 1, FileURL: "memory://pg", FileType: "md", FileSize: 120, ProcessMode: "chunk", ChunkStrategy: "structure_aware", ChunkConfig: "{}", PipelineID: "pipe_pg", Status: "success", CreatedBy: "admin", UpdatedBy: "admin", CreateTime: now, UpdateTime: now.Add(time.Minute)},
+		},
+		[]domainknowledge.KnowledgeChunk{
+			{ID: "chunk_pg", KBID: "kb_pg", DocID: "doc_pg", ChunkIndex: 1, Content: "PostgreSQL Chunk 更新", ContentHash: "pg-hash-new", CharCount: 19, TokenCount: 4, Enabled: 0, CreateTime: now, UpdateTime: now.Add(time.Minute)},
+		},
+		[]domainknowledge.KnowledgeDocumentChunkLog{
+			{ID: "log_pg", DocID: "doc_pg", Status: "success", ProcessMode: "chunk", ChunkStrategy: "structure_aware", PipelineID: "pipe_pg", PipelineName: "pipe_pg", TotalDuration: 120, ChunkCount: 1, StartTime: now, EndTime: now.Add(120 * time.Millisecond), CreateTime: now},
+		},
+	); err != nil {
+		t.Fatalf("update postgres knowledge records failed: %v", err)
+	}
+	bases, docs, chunks, logs, err := knowledgeRepository.LoadKnowledgeRecords()
+	if err != nil {
+		t.Fatalf("load postgres knowledge records failed: %v", err)
+	}
+	if len(bases) != 1 || bases[0].Name != "PostgreSQL 知识库更新" || len(docs) != 1 || docs[0].DocName != "PostgreSQL 文档更新" || docs[0].Enabled || len(chunks) != 1 || chunks[0].Enabled != 0 || len(logs) != 1 || logs[0].Status != "success" {
+		t.Fatalf("unexpected postgres knowledge records bases=%#v docs=%#v chunks=%#v logs=%#v", bases, docs, chunks, logs)
 	}
 }
 
