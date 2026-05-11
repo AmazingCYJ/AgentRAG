@@ -166,15 +166,45 @@ ORDER BY trace_id ASC, start_time ASC`)
 
 // SaveTraceRecords 覆盖保存当前 Trace 运行记录和节点。
 func (r *SQLRagTraceRepository) SaveTraceRecords(runs []domainragtrace.Run, nodes []domainragtrace.Node) error {
+	runIDs := make([]string, 0, len(runs))
+	for _, run := range runs {
+		runIDs = append(runIDs, defaultTraceRunID(run))
+	}
+	if err := rejectDuplicateIDs(runIDs); err != nil {
+		return err
+	}
+	nodeIDs := make([]string, 0, len(nodes))
+	for _, node := range nodes {
+		nodeIDs = append(nodeIDs, defaultTraceNodeID(node))
+	}
+	if err := rejectDuplicateIDs(nodeIDs); err != nil {
+		return err
+	}
+
 	tx, err := r.database.Begin()
 	if err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`DELETE FROM agentrag_trace_nodes`); err != nil {
+	replaceAll, err := traceSnapshotNeedsFullReplace(tx, runs, nodes, runIDs, nodeIDs)
+	if err != nil {
 		_ = tx.Rollback()
 		return err
 	}
-	if _, err := tx.Exec(`DELETE FROM agentrag_trace_runs`); err != nil {
+	if replaceAll {
+		_, err = tx.Exec(`DELETE FROM agentrag_trace_nodes`)
+	} else {
+		err = deleteMissingRows(tx, "agentrag_trace_nodes", "id", nodeIDs)
+	}
+	if err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if replaceAll {
+		_, err = tx.Exec(`DELETE FROM agentrag_trace_runs`)
+	} else {
+		err = deleteMissingRows(tx, "agentrag_trace_runs", "id", runIDs)
+	}
+	if err != nil {
 		_ = tx.Rollback()
 		return err
 	}
@@ -189,12 +219,103 @@ func (r *SQLRagTraceRepository) SaveTraceRecords(runs []domainragtrace.Run, node
 	return tx.Commit()
 }
 
+func traceSnapshotNeedsFullReplace(tx *SQLTx, runs []domainragtrace.Run, nodes []domainragtrace.Node, runIDs []string, nodeIDs []string) (bool, error) {
+	replaceRuns, err := traceRunsNeedFullReplace(tx, runs, runIDs)
+	if err != nil || replaceRuns {
+		return replaceRuns, err
+	}
+	return traceNodesNeedFullReplace(tx, nodes, nodeIDs)
+}
+
+func traceRunsNeedFullReplace(tx *SQLTx, runs []domainragtrace.Run, runIDs []string) (bool, error) {
+	if len(runIDs) == 0 {
+		return false, nil
+	}
+	desiredOwnerByTraceID := make(map[string]string, len(runs))
+	for _, run := range runs {
+		desiredOwnerByTraceID[run.TraceID] = defaultTraceRunID(run)
+	}
+
+	rows, err := tx.Query("SELECT id, trace_id FROM agentrag_trace_runs WHERE id IN ("+questionPlaceholders(len(runIDs))+")", stringArgs(runIDs)...)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			id      string
+			traceID string
+		)
+		if err := rows.Scan(&id, &traceID); err != nil {
+			return false, err
+		}
+		if ownerID, ok := desiredOwnerByTraceID[traceID]; ok && ownerID != id {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
+}
+
+type traceNodeKey struct {
+	traceID string
+	nodeID  string
+}
+
+func traceNodesNeedFullReplace(tx *SQLTx, nodes []domainragtrace.Node, nodeIDs []string) (bool, error) {
+	if len(nodeIDs) == 0 {
+		return false, nil
+	}
+	desiredOwnerByNodeKey := make(map[traceNodeKey]string, len(nodes))
+	for _, node := range nodes {
+		desiredOwnerByNodeKey[traceNodeKey{traceID: node.TraceID, nodeID: node.NodeID}] = defaultTraceNodeID(node)
+	}
+
+	rows, err := tx.Query("SELECT id, trace_id, node_id FROM agentrag_trace_nodes WHERE id IN ("+questionPlaceholders(len(nodeIDs))+")", stringArgs(nodeIDs)...)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			id      string
+			traceID string
+			nodeID  string
+		)
+		if err := rows.Scan(&id, &traceID, &nodeID); err != nil {
+			return false, err
+		}
+		if ownerID, ok := desiredOwnerByNodeKey[traceNodeKey{traceID: traceID, nodeID: nodeID}]; ok && ownerID != id {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
+}
+
 func saveTraceRuns(tx *SQLTx, runs []domainragtrace.Run) error {
 	stmt, err := tx.Prepare(`
 INSERT INTO agentrag_trace_runs
     (id, trace_id, trace_name, entry_method, conversation_id, task_id, user_name, user_id,
      status, error_message, duration_ms, start_time, end_time, extra_data, create_time, update_time, deleted)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+ON CONFLICT (id) DO UPDATE SET
+    trace_id = excluded.trace_id,
+    trace_name = excluded.trace_name,
+    entry_method = excluded.entry_method,
+    conversation_id = excluded.conversation_id,
+    task_id = excluded.task_id,
+    user_name = excluded.user_name,
+    user_id = excluded.user_id,
+    status = excluded.status,
+    error_message = excluded.error_message,
+    duration_ms = excluded.duration_ms,
+    start_time = excluded.start_time,
+    end_time = excluded.end_time,
+    extra_data = excluded.extra_data,
+    create_time = excluded.create_time,
+    update_time = excluded.update_time,
+    deleted = 0`)
 	if err != nil {
 		return err
 	}
@@ -230,7 +351,25 @@ func saveTraceNodes(tx *SQLTx, nodes []domainragtrace.Node) error {
 INSERT INTO agentrag_trace_nodes
     (id, trace_id, node_id, parent_node_id, depth, node_type, node_name,
      class_name, method_name, status, error_message, duration_ms, start_time, end_time, extra_data, create_time, update_time, deleted)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+ON CONFLICT (id) DO UPDATE SET
+    trace_id = excluded.trace_id,
+    node_id = excluded.node_id,
+    parent_node_id = excluded.parent_node_id,
+    depth = excluded.depth,
+    node_type = excluded.node_type,
+    node_name = excluded.node_name,
+    class_name = excluded.class_name,
+    method_name = excluded.method_name,
+    status = excluded.status,
+    error_message = excluded.error_message,
+    duration_ms = excluded.duration_ms,
+    start_time = excluded.start_time,
+    end_time = excluded.end_time,
+    extra_data = excluded.extra_data,
+    create_time = excluded.create_time,
+    update_time = excluded.update_time,
+    deleted = 0`)
 	if err != nil {
 		return err
 	}
@@ -286,6 +425,7 @@ func (r *SQLRagTraceRepository) migrateLegacyTraceTables() {
 		`UPDATE agentrag_trace_runs SET id = 'run_' || trace_id WHERE id = ''`,
 		`UPDATE agentrag_trace_runs SET create_time = start_time WHERE create_time IS NULL`,
 		`UPDATE agentrag_trace_runs SET update_time = end_time WHERE update_time IS NULL`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS uq_agentrag_trace_runs_id ON agentrag_trace_runs (id)`,
 		addColumnSQL(r.database.dialect, "agentrag_trace_nodes", `id TEXT NOT NULL DEFAULT ''`),
 		addColumnSQL(r.database.dialect, "agentrag_trace_nodes", `extra_data TEXT NOT NULL DEFAULT ''`),
 		addColumnSQL(r.database.dialect, "agentrag_trace_nodes", `create_time TIMESTAMP`),
@@ -294,6 +434,7 @@ func (r *SQLRagTraceRepository) migrateLegacyTraceTables() {
 		`UPDATE agentrag_trace_nodes SET id = trace_id || '_' || node_id WHERE id = ''`,
 		`UPDATE agentrag_trace_nodes SET create_time = start_time WHERE create_time IS NULL`,
 		`UPDATE agentrag_trace_nodes SET update_time = end_time WHERE update_time IS NULL`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS uq_agentrag_trace_nodes_id ON agentrag_trace_nodes (id)`,
 	} {
 		_, _ = r.database.Exec(statement)
 	}

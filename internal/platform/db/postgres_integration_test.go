@@ -8,6 +8,7 @@ import (
 	"time"
 
 	domainconversation "github.com/AmazingCYJ/AgentRAG/internal/domain/conversation"
+	domainragtrace "github.com/AmazingCYJ/AgentRAG/internal/domain/ragtrace"
 	domainusermgmt "github.com/AmazingCYJ/AgentRAG/internal/domain/usermgmt"
 )
 
@@ -110,6 +111,35 @@ func TestPostgresRepositoryBootstrapSmoke(t *testing.T) {
 	}
 	if len(sessions) != 1 || sessions[0].Title != "PostgreSQL 会话更新" || len(messages) != 1 || messages[0].Content != "PostgreSQL 消息更新" || len(feedbacks) != 0 {
 		t.Fatalf("unexpected postgres conversations sessions=%#v messages=%#v feedbacks=%#v", sessions, messages, feedbacks)
+	}
+
+	traceRepository := NewSQLRagTraceRepository(database)
+	if err := traceRepository.SaveTraceRecords(
+		[]domainragtrace.Run{
+			{ID: "run_pg", TraceID: "trace_pg", TraceName: "PostgreSQL Trace", EntryMethod: "chat", TaskID: "task_pg", Status: "SUCCESS", DurationMs: 80, StartTime: now, EndTime: now.Add(80 * time.Millisecond)},
+		},
+		[]domainragtrace.Node{
+			{ID: "node_pg", TraceID: "trace_pg", NodeID: "node_pg", NodeType: "LLM", NodeName: "PostgreSQL Node", Status: "SUCCESS", DurationMs: 70, StartTime: now.Add(time.Millisecond), EndTime: now.Add(80 * time.Millisecond)},
+		},
+	); err != nil {
+		t.Fatalf("save postgres trace records failed: %v", err)
+	}
+	if err := traceRepository.SaveTraceRecords(
+		[]domainragtrace.Run{
+			{ID: "run_pg", TraceID: "trace_pg", TraceName: "PostgreSQL Trace Updated", EntryMethod: "chat", TaskID: "task_pg", Status: "FAILED", ErrorMessage: "timeout", DurationMs: 120, StartTime: now, EndTime: now.Add(120 * time.Millisecond)},
+		},
+		[]domainragtrace.Node{
+			{ID: "node_pg", TraceID: "trace_pg", NodeID: "node_pg", NodeType: "RETRIEVER", NodeName: "PostgreSQL Node Updated", Status: "FAILED", ErrorMessage: "timeout", DurationMs: 110, StartTime: now.Add(time.Millisecond), EndTime: now.Add(120 * time.Millisecond)},
+		},
+	); err != nil {
+		t.Fatalf("update postgres trace records failed: %v", err)
+	}
+	runs, nodes, err := traceRepository.LoadTraceRecords()
+	if err != nil {
+		t.Fatalf("load postgres trace records failed: %v", err)
+	}
+	if len(runs) != 1 || runs[0].TraceName != "PostgreSQL Trace Updated" || runs[0].Status != "FAILED" || len(nodes) != 1 || nodes[0].NodeType != "RETRIEVER" || nodes[0].Status != "FAILED" {
+		t.Fatalf("unexpected postgres trace records runs=%#v nodes=%#v", runs, nodes)
 	}
 }
 
