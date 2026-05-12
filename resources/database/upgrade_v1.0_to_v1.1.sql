@@ -229,6 +229,20 @@ ALTER TABLE agentrag_knowledge_documents ADD COLUMN IF NOT EXISTS text_content T
 ALTER TABLE agentrag_knowledge_chunks ADD COLUMN IF NOT EXISTS embedding_model TEXT NOT NULL DEFAULT '';
 ALTER TABLE agentrag_knowledge_chunks ADD COLUMN IF NOT EXISTS embedding_vector TEXT NOT NULL DEFAULT '';
 
+CREATE TABLE IF NOT EXISTS agentrag_knowledge_vectors (
+    id TEXT PRIMARY KEY,
+    kb_id TEXT NOT NULL DEFAULT '',
+    doc_id TEXT NOT NULL DEFAULT '',
+    collection_name TEXT NOT NULL DEFAULT '',
+    chunk_id TEXT NOT NULL DEFAULT '',
+    chunk_index INTEGER NOT NULL DEFAULT 0,
+    content TEXT NOT NULL DEFAULT '',
+    embedding_model TEXT NOT NULL DEFAULT '',
+    embedding_vector TEXT NOT NULL DEFAULT '',
+    create_time TIMESTAMP NOT NULL,
+    update_time TIMESTAMP NOT NULL
+);
+
 DO $$
 BEGIN
     IF EXISTS (
@@ -282,6 +296,12 @@ ON agentrag_knowledge_chunks (doc_id, chunk_index);
 
 CREATE INDEX IF NOT EXISTS idx_agentrag_knowledge_chunks_kb_id
 ON agentrag_knowledge_chunks (kb_id);
+
+CREATE INDEX IF NOT EXISTS idx_agentrag_knowledge_vectors_collection
+ON agentrag_knowledge_vectors (collection_name, embedding_model);
+
+CREATE INDEX IF NOT EXISTS idx_agentrag_knowledge_vectors_chunk
+ON agentrag_knowledge_vectors (chunk_id);
 
 CREATE INDEX IF NOT EXISTS idx_agentrag_knowledge_chunk_logs_doc_id
 ON agentrag_knowledge_chunk_logs (doc_id, create_time DESC);

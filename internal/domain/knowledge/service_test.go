@@ -1,6 +1,7 @@
 package knowledge
 
 import (
+	"context"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -363,6 +364,53 @@ func TestKnowledgeChunkCachesLocalEmbedding(t *testing.T) {
 	}
 }
 
+func TestKnowledgeChunkUsesInjectedEmbeddingService(t *testing.T) {
+	embeddingService := &fakeEmbeddingService{
+		vectors: [][]float64{
+			{0.1, 0.2, 0.3},
+			{0.4, 0.5, 0.6},
+		},
+	}
+	service := NewServiceWithDependencies(nil, embeddingService)
+	kbID, err := service.CreateKnowledgeBase(KnowledgeBaseCreateRequest{
+		Name:           "外部向量知识库",
+		EmbeddingModel: "embedding-remote",
+		CollectionName: "remote_docs",
+		CreatedBy:      "admin",
+	})
+	if err != nil {
+		t.Fatalf("create knowledge base failed: %v", err)
+	}
+	doc, err := service.UploadDocument(kbID, KnowledgeDocumentUploadRequest{
+		SourceType: "file",
+		FileName:   "外部向量说明.md",
+	}, "admin")
+	if err != nil {
+		t.Fatalf("upload document failed: %v", err)
+	}
+	chunk, err := service.CreateChunk(doc.ID, KnowledgeChunkCreateRequest{Content: "第一段内容"})
+	if err != nil {
+		t.Fatalf("create chunk failed: %v", err)
+	}
+	if chunk.EmbeddingModel != "embedding-remote" || len(chunk.Embedding) != 3 || chunk.Embedding[2] != 0.3 {
+		t.Fatalf("expected injected embedding on create, got %#v", chunk)
+	}
+
+	if err := service.UpdateChunk(doc.ID, chunk.ID, KnowledgeChunkUpdateRequest{Content: "第二段内容"}); err != nil {
+		t.Fatalf("update chunk failed: %v", err)
+	}
+	page, err := service.PageChunks(doc.ID, KnowledgeChunkPageRequest{Current: 1, Size: 10})
+	if err != nil {
+		t.Fatalf("page chunks failed: %v", err)
+	}
+	if len(page.Records[0].Embedding) != 3 || page.Records[0].Embedding[0] != 0.4 {
+		t.Fatalf("expected injected embedding on update, got %#v", page.Records[0])
+	}
+	if len(embeddingService.models) != 2 || embeddingService.models[0] != "embedding-remote" || embeddingService.models[1] != "embedding-remote" {
+		t.Fatalf("expected embedding service to receive knowledge base model, got %#v", embeddingService.models)
+	}
+}
+
 func TestEnableDocumentPersistsState(t *testing.T) {
 	repository := &memoryKnowledgeRepository{}
 	service := NewServiceWithRepository(repository)
@@ -404,6 +452,23 @@ type memoryKnowledgeRepository struct {
 	docs   []KnowledgeDocument
 	chunks []KnowledgeChunk
 	logs   []KnowledgeDocumentChunkLog
+}
+
+type fakeEmbeddingService struct {
+	vectors [][]float64
+	models  []string
+	texts   []string
+}
+
+func (s *fakeEmbeddingService) Embed(_ context.Context, model string, texts []string) ([][]float64, error) {
+	s.models = append(s.models, model)
+	s.texts = append(s.texts, texts...)
+	if len(s.vectors) == 0 {
+		return nil, nil
+	}
+	vector := s.vectors[0]
+	s.vectors = s.vectors[1:]
+	return [][]float64{cloneFloat64Slice(vector)}, nil
 }
 
 func (r *memoryKnowledgeRepository) LoadKnowledgeRecords() ([]KnowledgeBase, []KnowledgeDocument, []KnowledgeChunk, []KnowledgeDocumentChunkLog, error) {

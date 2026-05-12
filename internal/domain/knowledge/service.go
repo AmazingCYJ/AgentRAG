@@ -430,6 +430,7 @@ type Service struct {
 	now   func() time.Time
 	newID func() string
 	repo  Repository
+	embed EmbeddingService
 }
 
 // NewService 创建知识库服务。
@@ -443,6 +444,14 @@ func NewService(store *platformstate.FileStore) *Service {
 
 // NewServiceWithRepository 创建基于指定仓储的知识库服务。
 func NewServiceWithRepository(repo Repository) *Service {
+	return NewServiceWithDependencies(repo, nil)
+}
+
+// NewServiceWithDependencies 创建基于指定依赖的知识库服务。
+func NewServiceWithDependencies(repo Repository, embed EmbeddingService) *Service {
+	if embed == nil {
+		embed = newLocalEmbeddingService()
+	}
 	service := &Service{
 		knowledgeBases: make(map[string]KnowledgeBase),
 		documents:      make(map[string]KnowledgeDocument),
@@ -451,6 +460,7 @@ func NewServiceWithRepository(repo Repository) *Service {
 		now:            time.Now,
 		newID:          func() string { return strings.ReplaceAll(guid.S(), "-", "") },
 		repo:           repo,
+		embed:          embed,
 	}
 	if bases, docs, chunks, logs, err := service.loadRecords(); err == nil {
 		for _, item := range bases {
@@ -843,7 +853,7 @@ func (s *Service) SearchDocuments(keyword string, limit int) []KnowledgeDocument
 	}
 	keyword = strings.TrimSpace(keyword)
 	queryTokens := tokenize(keyword)
-	queryEmbedding := embedText(keyword)
+	queryEmbedding := embedOne(context.Background(), s.embed, "", keyword)
 
 	type scoredDocument struct {
 		item  KnowledgeDocumentSearchItem
@@ -894,7 +904,7 @@ func (s *Service) BuildPromptContext(_ context.Context, query string, limit int)
 	if len(needle) == 0 {
 		return "", nil
 	}
-	queryEmbedding := embedText(query)
+	queryEmbedding := embedOne(context.Background(), s.embed, "", query)
 
 	type scoredChunk struct {
 		kbName     string
@@ -1075,7 +1085,7 @@ func (s *Service) UpdateChunk(docID, chunkID string, req KnowledgeChunkUpdateReq
 	chunk.TokenCount = estimateTokens(content)
 	chunk.KBID = doc.KBID
 	chunk.EmbeddingModel = s.embeddingModelForDocLocked(doc)
-	chunk.Embedding = embedText(content)
+	chunk.Embedding = embedOne(context.Background(), s.embed, chunk.EmbeddingModel, content)
 	chunk.UpdateTime = s.now()
 	s.chunks[chunkID] = chunk
 	if err := s.persistLocked(); err != nil {
@@ -1171,6 +1181,7 @@ func (s *Service) createChunkLocked(doc KnowledgeDocument, req KnowledgeChunkCre
 	if req.Index != nil {
 		index = *req.Index
 	}
+	embeddingModel := s.embeddingModelForDocLocked(doc)
 	chunk := KnowledgeChunk{
 		ID:             chunkID,
 		KBID:           doc.KBID,
@@ -1180,8 +1191,8 @@ func (s *Service) createChunkLocked(doc KnowledgeDocument, req KnowledgeChunkCre
 		ContentHash:    buildContentHash(content),
 		CharCount:      countChars(content),
 		TokenCount:     estimateTokens(content),
-		EmbeddingModel: s.embeddingModelForDocLocked(doc),
-		Embedding:      embedText(content),
+		EmbeddingModel: embeddingModel,
+		Embedding:      embedOne(context.Background(), s.embed, embeddingModel, content),
 		Enabled:        1,
 		CreateTime:     now,
 		UpdateTime:     now,

@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -55,6 +56,7 @@ func TestPostgresRepositoryBootstrapSmoke(t *testing.T) {
 		{name: "conversation", bootstrap: NewSQLConversationRepository(database).Bootstrap},
 		{name: "rag trace", bootstrap: NewSQLRagTraceRepository(database).Bootstrap},
 		{name: "knowledge", bootstrap: NewSQLKnowledgeRepository(database).Bootstrap},
+		{name: "knowledge vector", bootstrap: NewSQLKnowledgeVectorStore(database).Bootstrap},
 		{name: "ingestion", bootstrap: NewSQLIngestionRepository(database).Bootstrap},
 	}
 	for _, repository := range repositories {
@@ -210,6 +212,24 @@ func TestPostgresRepositoryBootstrapSmoke(t *testing.T) {
 	}
 	if len(bases) != 1 || bases[0].Name != "PostgreSQL 知识库更新" || len(docs) != 1 || docs[0].DocName != "PostgreSQL 文档更新" || docs[0].Enabled || len(chunks) != 1 || chunks[0].Enabled != 0 || chunks[0].EmbeddingModel != "embedding-v2" || len(chunks[0].Embedding) != 3 || chunks[0].Embedding[2] != 0.5 || len(logs) != 1 || logs[0].Status != "success" {
 		t.Fatalf("unexpected postgres knowledge records bases=%#v docs=%#v chunks=%#v logs=%#v", bases, docs, chunks, logs)
+	}
+	vectorStore := NewSQLKnowledgeVectorStore(database)
+	if err := vectorStore.Upsert(context.Background(), []domainknowledge.KnowledgeVector{
+		{ID: "vec_pg", KBID: "kb_pg", DocID: "doc_pg", CollectionName: "pg_collection", ChunkID: "chunk_pg", ChunkIndex: 1, Content: "PostgreSQL Chunk 更新", EmbeddingModel: "embedding-v2", Embedding: []float64{0.3, 0.4, 0.5}},
+	}); err != nil {
+		t.Fatalf("upsert postgres knowledge vector failed: %v", err)
+	}
+	vectorResults, err := vectorStore.Search(context.Background(), domainknowledge.VectorSearchRequest{
+		CollectionName: "pg_collection",
+		EmbeddingModel: "embedding-v2",
+		Embedding:      []float64{0.3, 0.4, 0.5},
+		Limit:          1,
+	})
+	if err != nil {
+		t.Fatalf("search postgres knowledge vector failed: %v", err)
+	}
+	if len(vectorResults) != 1 || vectorResults[0].Vector.ID != "vec_pg" {
+		t.Fatalf("unexpected postgres knowledge vector results %#v", vectorResults)
 	}
 
 	ingestionRepository := NewSQLIngestionRepository(database)
