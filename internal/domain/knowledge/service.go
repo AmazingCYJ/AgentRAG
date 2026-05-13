@@ -427,10 +427,26 @@ type Service struct {
 	chunks         map[string]KnowledgeChunk
 	chunkLogs      map[string][]KnowledgeDocumentChunkLog
 
-	now   func() time.Time
-	newID func() string
-	repo  Repository
-	embed EmbeddingService
+	now         func() time.Time
+	newID       func() string
+	repo        Repository
+	embed       EmbeddingService
+	vectorStore VectorStore
+}
+
+type knowledgeSnapshot struct {
+	knowledgeBases map[string]KnowledgeBase
+	documents      map[string]KnowledgeDocument
+	chunks         map[string]KnowledgeChunk
+}
+
+type promptContextMatch struct {
+	kbName     string
+	docName    string
+	source     string
+	chunkIndex int
+	content    string
+	score      retrievalScore
 }
 
 // NewService 创建知识库服务。
@@ -448,9 +464,13 @@ func NewServiceWithRepository(repo Repository) *Service {
 }
 
 // NewServiceWithDependencies 创建基于指定依赖的知识库服务。
-func NewServiceWithDependencies(repo Repository, embed EmbeddingService) *Service {
+func NewServiceWithDependencies(repo Repository, embed EmbeddingService, vectorStores ...VectorStore) *Service {
 	if embed == nil {
 		embed = newLocalEmbeddingService()
+	}
+	var vectorStore VectorStore
+	if len(vectorStores) > 0 {
+		vectorStore = vectorStores[0]
 	}
 	service := &Service{
 		knowledgeBases: make(map[string]KnowledgeBase),
@@ -461,6 +481,7 @@ func NewServiceWithDependencies(repo Repository, embed EmbeddingService) *Servic
 		newID:          func() string { return strings.ReplaceAll(guid.S(), "-", "") },
 		repo:           repo,
 		embed:          embed,
+		vectorStore:    vectorStore,
 	}
 	if bases, docs, chunks, logs, err := service.loadRecords(); err == nil {
 		for _, item := range bases {
@@ -570,13 +591,19 @@ func (s *Service) UpdateKnowledgeBase(id string, req KnowledgeBaseUpdateRequest)
 }
 
 // DeleteKnowledgeBase 删除知识库及其关联数据。
-func (s *Service) DeleteKnowledgeBase(id string) error {
+func (s *Service) DeleteKnowledgeBase(ctx context.Context, id string) error {
+	ctx = normalizeContext(ctx)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if _, ok := s.knowledgeBases[id]; !ok {
 		return ErrKnowledgeBaseNotFound
 	}
+	vectorIDs := make([]string, 0)
 	delete(s.knowledgeBases, id)
 	for docID, doc := range s.documents {
 		if doc.KBID != id {
@@ -586,11 +613,15 @@ func (s *Service) DeleteKnowledgeBase(id string) error {
 		delete(s.chunkLogs, docID)
 		for chunkID, chunk := range s.chunks {
 			if chunk.DocID == docID {
+				vectorIDs = append(vectorIDs, chunk.ID)
 				delete(s.chunks, chunkID)
 			}
 		}
 	}
 	if err := s.persistLocked(); err != nil {
+		return err
+	}
+	if err := s.deleteVectors(ctx, vectorIDs); err != nil {
 		return err
 	}
 	return nil
@@ -738,7 +769,12 @@ func (s *Service) UpdateDocument(docID string, req KnowledgeDocumentUpdateReques
 }
 
 // StartDocumentChunk 启动文档分块，生成示例 Chunk 和日志。
-func (s *Service) StartDocumentChunk(docID string) error {
+func (s *Service) StartDocumentChunk(ctx context.Context, docID string) error {
+	ctx = normalizeContext(ctx)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -749,11 +785,16 @@ func (s *Service) StartDocumentChunk(docID string) error {
 
 	startTime := s.now()
 	chunkContents := buildChunkContents(item)
+	createdChunks := make([]KnowledgeChunk, 0, len(chunkContents))
 	for index, content := range chunkContents {
-		s.createChunkLocked(item, KnowledgeChunkCreateRequest{
+		chunk, err := s.createChunkLocked(ctx, item, KnowledgeChunkCreateRequest{
 			Content: content,
 			Index:   ptrInt(index),
 		})
+		if err != nil {
+			return err
+		}
+		createdChunks = append(createdChunks, chunk)
 	}
 
 	item.Status = "success"
@@ -784,11 +825,19 @@ func (s *Service) StartDocumentChunk(docID string) error {
 	if err := s.persistLocked(); err != nil {
 		return err
 	}
+	if err := s.upsertChunkVectors(ctx, createdChunks); err != nil {
+		return err
+	}
 	return nil
 }
 
 // DeleteDocument 删除文档及其关联 Chunk 和日志。
-func (s *Service) DeleteDocument(docID string) error {
+func (s *Service) DeleteDocument(ctx context.Context, docID string) error {
+	ctx = normalizeContext(ctx)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -796,10 +845,12 @@ func (s *Service) DeleteDocument(docID string) error {
 	if !ok {
 		return ErrDocumentNotFound
 	}
+	vectorIDs := make([]string, 0)
 	delete(s.documents, docID)
 	delete(s.chunkLogs, docID)
 	for chunkID, chunk := range s.chunks {
 		if chunk.DocID == docID {
+			vectorIDs = append(vectorIDs, chunk.ID)
 			delete(s.chunks, chunkID)
 		}
 	}
@@ -807,6 +858,9 @@ func (s *Service) DeleteDocument(docID string) error {
 	kb.UpdateTime = s.now()
 	s.knowledgeBases[item.KBID] = kb
 	if err := s.persistLocked(); err != nil {
+		return err
+	}
+	if err := s.deleteVectors(ctx, vectorIDs); err != nil {
 		return err
 	}
 	return nil
@@ -844,16 +898,33 @@ func (s *Service) PageDocuments(kbID string, req KnowledgeDocumentPageRequest) (
 }
 
 // SearchDocuments 搜索文档。
-func (s *Service) SearchDocuments(keyword string, limit int) []KnowledgeDocumentSearchItem {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
+func (s *Service) SearchDocuments(ctx context.Context, keyword string, limit int) []KnowledgeDocumentSearchItem {
+	ctx = normalizeContext(ctx)
+	if err := ctx.Err(); err != nil {
+		return nil
+	}
 	if limit <= 0 {
 		limit = 8
 	}
 	keyword = strings.TrimSpace(keyword)
+	snapshot := s.snapshotRecords()
+	if keyword != "" && s.vectorStore != nil {
+		if docs, err := s.searchDocumentsByVector(ctx, snapshot, keyword, limit); err == nil && len(docs) > 0 {
+			return docs
+		} else if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil
+		}
+	}
+
 	queryTokens := tokenize(keyword)
-	queryEmbedding := embedOne(context.Background(), s.embed, "", keyword)
+	var queryEmbedding []float64
+	if keyword != "" {
+		embedding, err := embedOne(ctx, s.embed, "", keyword)
+		if err != nil {
+			return nil
+		}
+		queryEmbedding = embedding
+	}
 
 	type scoredDocument struct {
 		item  KnowledgeDocumentSearchItem
@@ -861,7 +932,7 @@ func (s *Service) SearchDocuments(keyword string, limit int) []KnowledgeDocument
 	}
 
 	filtered := make([]scoredDocument, 0, limit)
-	for _, item := range s.documents {
+	for _, item := range snapshot.documents {
 		score := retrievalScore{lexical: 1}
 		if keyword != "" {
 			score = scoreKnowledgeMatch(queryTokens, queryEmbedding, item.DocName+" "+item.SourceLocation)
@@ -874,7 +945,7 @@ func (s *Service) SearchDocuments(keyword string, limit int) []KnowledgeDocument
 				ID:      item.ID,
 				KBID:    item.KBID,
 				DocName: item.DocName,
-				KBName:  s.knowledgeBases[item.KBID].Name,
+				KBName:  snapshot.knowledgeBases[item.KBID].Name,
 			},
 			score: score,
 		})
@@ -896,31 +967,38 @@ func (s *Service) SearchDocuments(keyword string, limit int) []KnowledgeDocument
 }
 
 // BuildPromptContext 基于现有 Chunk 构建给大模型使用的检索上下文。
-func (s *Service) BuildPromptContext(_ context.Context, query string, limit int) (string, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
+func (s *Service) BuildPromptContext(ctx context.Context, query string, limit int) (string, error) {
+	ctx = normalizeContext(ctx)
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	needle := tokenize(query)
 	if len(needle) == 0 {
 		return "", nil
 	}
-	queryEmbedding := embedOne(context.Background(), s.embed, "", query)
-
-	type scoredChunk struct {
-		kbName     string
-		docName    string
-		source     string
-		chunkIndex int
-		content    string
-		score      retrievalScore
+	snapshot := s.snapshotRecords()
+	if s.vectorStore != nil {
+		matches, err := s.searchPromptContextByVector(ctx, snapshot, query, limit)
+		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return "", ctxErr
+			}
+		} else if len(matches) > 0 {
+			return formatPromptContext(matches, limit), nil
+		}
 	}
 
-	matches := make([]scoredChunk, 0)
-	for _, chunk := range s.chunks {
+	queryEmbedding, err := embedOne(ctx, s.embed, "", query)
+	if err != nil {
+		return "", err
+	}
+
+	matches := make([]promptContextMatch, 0)
+	for _, chunk := range snapshot.chunks {
 		if chunk.Enabled == 0 {
 			continue
 		}
-		doc, ok := s.documents[chunk.DocID]
+		doc, ok := snapshot.documents[chunk.DocID]
 		if !ok || !doc.Enabled {
 			continue
 		}
@@ -929,10 +1007,10 @@ func (s *Service) BuildPromptContext(_ context.Context, query string, limit int)
 			continue
 		}
 		kbName := ""
-		if kb, ok := s.knowledgeBases[doc.KBID]; ok {
+		if kb, ok := snapshot.knowledgeBases[doc.KBID]; ok {
 			kbName = kb.Name
 		}
-		matches = append(matches, scoredChunk{
+		matches = append(matches, promptContextMatch{
 			kbName:     kbName,
 			docName:    doc.DocName,
 			source:     defaultText(doc.SourceLocation, defaultText(doc.FileURL, doc.DocName)),
@@ -942,39 +1020,7 @@ func (s *Service) BuildPromptContext(_ context.Context, query string, limit int)
 		})
 	}
 
-	sort.Slice(matches, func(i, j int) bool {
-		if compareRetrievalScore(matches[i].score, matches[j].score) == 0 {
-			if matches[i].docName == matches[j].docName {
-				return matches[i].chunkIndex < matches[j].chunkIndex
-			}
-			return matches[i].docName < matches[j].docName
-		}
-		return compareRetrievalScore(matches[i].score, matches[j].score) > 0
-	})
-
-	if limit <= 0 {
-		limit = 4
-	}
-	if len(matches) > limit {
-		matches = matches[:limit]
-	}
-	if len(matches) == 0 {
-		return "", nil
-	}
-
-	parts := make([]string, 0, len(matches))
-	for index, item := range matches {
-		// 给大模型保留来源信息，便于生成可追溯的回答。
-		lines := []string{
-			"[" + strconv.Itoa(index+1) + "] 知识库：" + defaultText(item.kbName, "未命名知识库"),
-			"文档：" + item.docName,
-			"来源：" + defaultText(item.source, item.docName),
-			"Chunk：" + strconv.Itoa(item.chunkIndex),
-			item.content,
-		}
-		parts = append(parts, strings.Join(lines, "\n"))
-	}
-	return strings.Join(parts, "\n\n"), nil
+	return formatPromptContext(matches, limit), nil
 }
 
 // EnableDocument 启用或禁用文档。
@@ -1043,7 +1089,12 @@ func (s *Service) PageChunks(docID string, req KnowledgeChunkPageRequest) (PageR
 }
 
 // CreateChunk 创建新的 Chunk。
-func (s *Service) CreateChunk(docID string, req KnowledgeChunkCreateRequest) (KnowledgeChunk, error) {
+func (s *Service) CreateChunk(ctx context.Context, docID string, req KnowledgeChunkCreateRequest) (KnowledgeChunk, error) {
+	ctx = normalizeContext(ctx)
+	if err := ctx.Err(); err != nil {
+		return KnowledgeChunk{}, err
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -1051,18 +1102,26 @@ func (s *Service) CreateChunk(docID string, req KnowledgeChunkCreateRequest) (Kn
 	if !ok {
 		return KnowledgeChunk{}, ErrDocumentNotFound
 	}
-	chunk, err := s.createChunkLocked(doc, req)
+	chunk, err := s.createChunkLocked(ctx, doc, req)
 	if err != nil {
 		return KnowledgeChunk{}, err
 	}
 	if err := s.persistLocked(); err != nil {
 		return KnowledgeChunk{}, err
 	}
+	if err := s.upsertChunkVectors(ctx, []KnowledgeChunk{chunk}); err != nil {
+		return KnowledgeChunk{}, err
+	}
 	return chunk, nil
 }
 
 // UpdateChunk 更新 Chunk 内容。
-func (s *Service) UpdateChunk(docID, chunkID string, req KnowledgeChunkUpdateRequest) error {
+func (s *Service) UpdateChunk(ctx context.Context, docID, chunkID string, req KnowledgeChunkUpdateRequest) error {
+	ctx = normalizeContext(ctx)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	content := strings.TrimSpace(req.Content)
 	if content == "" {
 		return ErrChunkContentRequired
@@ -1085,17 +1144,29 @@ func (s *Service) UpdateChunk(docID, chunkID string, req KnowledgeChunkUpdateReq
 	chunk.TokenCount = estimateTokens(content)
 	chunk.KBID = doc.KBID
 	chunk.EmbeddingModel = s.embeddingModelForDocLocked(doc)
-	chunk.Embedding = embedOne(context.Background(), s.embed, chunk.EmbeddingModel, content)
+	embedding, err := embedOne(ctx, s.embed, chunk.EmbeddingModel, content)
+	if err != nil {
+		return err
+	}
+	chunk.Embedding = embedding
 	chunk.UpdateTime = s.now()
 	s.chunks[chunkID] = chunk
 	if err := s.persistLocked(); err != nil {
+		return err
+	}
+	if err := s.upsertChunkVectors(ctx, []KnowledgeChunk{chunk}); err != nil {
 		return err
 	}
 	return nil
 }
 
 // DeleteChunk 删除指定 Chunk。
-func (s *Service) DeleteChunk(docID, chunkID string) error {
+func (s *Service) DeleteChunk(ctx context.Context, docID, chunkID string) error {
+	ctx = normalizeContext(ctx)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -1109,6 +1180,9 @@ func (s *Service) DeleteChunk(docID, chunkID string) error {
 	delete(s.chunks, chunkID)
 	s.updateDocumentChunkCountLocked(docID)
 	if err := s.persistLocked(); err != nil {
+		return err
+	}
+	if err := s.deleteVectors(ctx, []string{chunk.ID}); err != nil {
 		return err
 	}
 	return nil
@@ -1167,7 +1241,7 @@ func (s *Service) BatchToggleChunks(docID string, chunkIDs []string, enabled boo
 	return nil
 }
 
-func (s *Service) createChunkLocked(doc KnowledgeDocument, req KnowledgeChunkCreateRequest) (KnowledgeChunk, error) {
+func (s *Service) createChunkLocked(ctx context.Context, doc KnowledgeDocument, req KnowledgeChunkCreateRequest) (KnowledgeChunk, error) {
 	content := strings.TrimSpace(req.Content)
 	if content == "" {
 		return KnowledgeChunk{}, ErrChunkContentRequired
@@ -1182,6 +1256,10 @@ func (s *Service) createChunkLocked(doc KnowledgeDocument, req KnowledgeChunkCre
 		index = *req.Index
 	}
 	embeddingModel := s.embeddingModelForDocLocked(doc)
+	embedding, err := embedOne(ctx, s.embed, embeddingModel, content)
+	if err != nil {
+		return KnowledgeChunk{}, err
+	}
 	chunk := KnowledgeChunk{
 		ID:             chunkID,
 		KBID:           doc.KBID,
@@ -1192,7 +1270,7 @@ func (s *Service) createChunkLocked(doc KnowledgeDocument, req KnowledgeChunkCre
 		CharCount:      countChars(content),
 		TokenCount:     estimateTokens(content),
 		EmbeddingModel: embeddingModel,
-		Embedding:      embedOne(context.Background(), s.embed, embeddingModel, content),
+		Embedding:      embedding,
 		Enabled:        1,
 		CreateTime:     now,
 		UpdateTime:     now,
@@ -1207,6 +1285,292 @@ func (s *Service) embeddingModelForDocLocked(doc KnowledgeDocument) string {
 		return strings.TrimSpace(kb.EmbeddingModel)
 	}
 	return ""
+}
+
+func (s *Service) upsertChunkVectors(ctx context.Context, chunks []KnowledgeChunk) error {
+	if s.vectorStore == nil || len(chunks) == 0 {
+		return nil
+	}
+	vectors := make([]KnowledgeVector, 0, len(chunks))
+	for _, chunk := range chunks {
+		doc, ok := s.documents[chunk.DocID]
+		if !ok {
+			continue
+		}
+		kb, ok := s.knowledgeBases[doc.KBID]
+		if !ok {
+			continue
+		}
+		vectors = append(vectors, KnowledgeVector{
+			ID:             chunk.ID,
+			KBID:           doc.KBID,
+			DocID:          doc.ID,
+			CollectionName: strings.TrimSpace(kb.CollectionName),
+			ChunkID:        chunk.ID,
+			ChunkIndex:     chunk.ChunkIndex,
+			Content:        chunk.Content,
+			EmbeddingModel: strings.TrimSpace(chunk.EmbeddingModel),
+			Embedding:      cloneFloat64Slice(chunk.Embedding),
+		})
+	}
+	if len(vectors) == 0 {
+		return nil
+	}
+	return s.vectorStore.Upsert(ctx, vectors)
+}
+
+func (s *Service) deleteVectors(ctx context.Context, ids []string) error {
+	if s.vectorStore == nil || len(ids) == 0 {
+		return nil
+	}
+	uniqueIDs := make([]string, 0, len(ids))
+	seen := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		uniqueIDs = append(uniqueIDs, id)
+	}
+	if len(uniqueIDs) == 0 {
+		return nil
+	}
+	return s.vectorStore.Delete(ctx, uniqueIDs)
+}
+
+func (s *Service) snapshotRecords() knowledgeSnapshot {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	snapshot := knowledgeSnapshot{
+		knowledgeBases: make(map[string]KnowledgeBase, len(s.knowledgeBases)),
+		documents:      make(map[string]KnowledgeDocument, len(s.documents)),
+		chunks:         make(map[string]KnowledgeChunk, len(s.chunks)),
+	}
+	for id, item := range s.knowledgeBases {
+		snapshot.knowledgeBases[id] = item
+	}
+	for id, item := range s.documents {
+		snapshot.documents[id] = item
+	}
+	for id, item := range s.chunks {
+		item.Embedding = cloneFloat64Slice(item.Embedding)
+		snapshot.chunks[id] = item
+	}
+	return snapshot
+}
+
+func (s *Service) searchPromptContextByVector(ctx context.Context, snapshot knowledgeSnapshot, query string, limit int) ([]promptContextMatch, error) {
+	results, err := s.searchVectors(ctx, snapshot, query, limit)
+	if err != nil {
+		return nil, err
+	}
+	matches := make([]promptContextMatch, 0, len(results))
+	seenChunks := make(map[string]struct{}, len(results))
+	for _, result := range results {
+		chunkID := defaultText(result.Vector.ChunkID, result.Vector.ID)
+		if _, ok := seenChunks[chunkID]; ok {
+			continue
+		}
+		chunk, doc, kb, ok := snapshot.vectorResultRecords(result)
+		if !ok {
+			continue
+		}
+		seenChunks[chunkID] = struct{}{}
+		matches = append(matches, promptContextMatch{
+			kbName:     kb.Name,
+			docName:    doc.DocName,
+			source:     defaultText(doc.SourceLocation, defaultText(doc.FileURL, doc.DocName)),
+			chunkIndex: chunk.ChunkIndex,
+			content:    chunk.Content,
+			score: retrievalScore{
+				lexical: 1,
+				vector:  result.Score,
+			},
+		})
+	}
+	sortPromptContextMatches(matches)
+	return limitPromptContextMatches(matches, limit), nil
+}
+
+func (s *Service) searchDocumentsByVector(ctx context.Context, snapshot knowledgeSnapshot, keyword string, limit int) ([]KnowledgeDocumentSearchItem, error) {
+	results, err := s.searchVectors(ctx, snapshot, keyword, limit)
+	if err != nil {
+		return nil, err
+	}
+	type scoredDocument struct {
+		item  KnowledgeDocumentSearchItem
+		score retrievalScore
+	}
+	byDocID := make(map[string]scoredDocument, len(results))
+	for _, result := range results {
+		_, doc, kb, ok := snapshot.vectorResultRecords(result)
+		if !ok {
+			continue
+		}
+		scored := scoredDocument{
+			item: KnowledgeDocumentSearchItem{
+				ID:      doc.ID,
+				KBID:    doc.KBID,
+				DocName: doc.DocName,
+				KBName:  kb.Name,
+			},
+			score: retrievalScore{
+				lexical: 1,
+				vector:  result.Score,
+			},
+		}
+		current, exists := byDocID[doc.ID]
+		if !exists || compareRetrievalScore(scored.score, current.score) > 0 {
+			byDocID[doc.ID] = scored
+		}
+	}
+	documents := make([]scoredDocument, 0, len(byDocID))
+	for _, item := range byDocID {
+		documents = append(documents, item)
+	}
+	sort.Slice(documents, func(i, j int) bool {
+		if compareRetrievalScore(documents[i].score, documents[j].score) == 0 {
+			return documents[i].item.DocName < documents[j].item.DocName
+		}
+		return compareRetrievalScore(documents[i].score, documents[j].score) > 0
+	})
+	if len(documents) > limit {
+		documents = documents[:limit]
+	}
+	result := make([]KnowledgeDocumentSearchItem, 0, len(documents))
+	for _, item := range documents {
+		result = append(result, item.item)
+	}
+	return result, nil
+}
+
+func (s *Service) searchVectors(ctx context.Context, snapshot knowledgeSnapshot, query string, limit int) ([]VectorSearchResult, error) {
+	if s.vectorStore == nil {
+		return nil, nil
+	}
+	groups := make(map[string]KnowledgeBase, len(snapshot.knowledgeBases))
+	for _, kb := range snapshot.knowledgeBases {
+		collectionName := strings.TrimSpace(kb.CollectionName)
+		if collectionName == "" {
+			continue
+		}
+		embeddingModel := strings.TrimSpace(kb.EmbeddingModel)
+		key := collectionName + "\x00" + embeddingModel
+		if _, ok := groups[key]; ok {
+			continue
+		}
+		kb.CollectionName = collectionName
+		kb.EmbeddingModel = embeddingModel
+		groups[key] = kb
+	}
+	if len(groups) == 0 {
+		return nil, nil
+	}
+
+	searchLimit := vectorSearchLimit(limit)
+	results := make([]VectorSearchResult, 0)
+	for _, kb := range groups {
+		embedding, err := embedOne(ctx, s.embed, kb.EmbeddingModel, query)
+		if err != nil {
+			return nil, err
+		}
+		found, err := s.vectorStore.Search(ctx, VectorSearchRequest{
+			Query:          query,
+			CollectionName: kb.CollectionName,
+			EmbeddingModel: kb.EmbeddingModel,
+			Embedding:      embedding,
+			Limit:          searchLimit,
+		})
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, found...)
+	}
+	sort.Slice(results, func(i, j int) bool {
+		if results[i].Score == results[j].Score {
+			leftID := defaultText(results[i].Vector.ChunkID, results[i].Vector.ID)
+			rightID := defaultText(results[j].Vector.ChunkID, results[j].Vector.ID)
+			return leftID < rightID
+		}
+		return results[i].Score > results[j].Score
+	})
+	return results, nil
+}
+
+func (snapshot knowledgeSnapshot) vectorResultRecords(result VectorSearchResult) (KnowledgeChunk, KnowledgeDocument, KnowledgeBase, bool) {
+	chunkID := defaultText(result.Vector.ChunkID, result.Vector.ID)
+	chunk, ok := snapshot.chunks[chunkID]
+	if !ok || chunk.Enabled == 0 {
+		return KnowledgeChunk{}, KnowledgeDocument{}, KnowledgeBase{}, false
+	}
+	doc, ok := snapshot.documents[chunk.DocID]
+	if !ok || !doc.Enabled {
+		return KnowledgeChunk{}, KnowledgeDocument{}, KnowledgeBase{}, false
+	}
+	kb, ok := snapshot.knowledgeBases[doc.KBID]
+	if !ok {
+		return KnowledgeChunk{}, KnowledgeDocument{}, KnowledgeBase{}, false
+	}
+	return chunk, doc, kb, true
+}
+
+func formatPromptContext(matches []promptContextMatch, limit int) string {
+	sortPromptContextMatches(matches)
+	matches = limitPromptContextMatches(matches, limit)
+	if len(matches) == 0 {
+		return ""
+	}
+
+	parts := make([]string, 0, len(matches))
+	for index, item := range matches {
+		// 给大模型保留来源信息，便于生成可追溯的回答。
+		lines := []string{
+			"[" + strconv.Itoa(index+1) + "] 知识库：" + defaultText(item.kbName, "未命名知识库"),
+			"文档：" + item.docName,
+			"来源：" + defaultText(item.source, item.docName),
+			"Chunk：" + strconv.Itoa(item.chunkIndex),
+			item.content,
+		}
+		parts = append(parts, strings.Join(lines, "\n"))
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+func sortPromptContextMatches(matches []promptContextMatch) {
+	sort.Slice(matches, func(i, j int) bool {
+		if compareRetrievalScore(matches[i].score, matches[j].score) == 0 {
+			if matches[i].docName == matches[j].docName {
+				return matches[i].chunkIndex < matches[j].chunkIndex
+			}
+			return matches[i].docName < matches[j].docName
+		}
+		return compareRetrievalScore(matches[i].score, matches[j].score) > 0
+	})
+}
+
+func limitPromptContextMatches(matches []promptContextMatch, limit int) []promptContextMatch {
+	if limit <= 0 {
+		limit = 4
+	}
+	if len(matches) > limit {
+		return matches[:limit]
+	}
+	return matches
+}
+
+func vectorSearchLimit(limit int) int {
+	if limit <= 0 {
+		limit = 4
+	}
+	if limit < 4 {
+		limit = 4
+	}
+	return limit * 4
 }
 
 func (s *Service) countDocumentsByKBLocked(kbID string) int {

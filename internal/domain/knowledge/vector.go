@@ -56,13 +56,30 @@ func newLocalEmbeddingService() EmbeddingService {
 	return localEmbeddingService{}
 }
 
-func embedOne(ctx context.Context, service EmbeddingService, model, text string) []float64 {
+func embedOne(ctx context.Context, service EmbeddingService, model, text string) ([]float64, error) {
+	ctx = normalizeContext(ctx)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if service == nil {
 		service = newLocalEmbeddingService()
 	}
 	vectors, err := service.Embed(ctx, model, []string{text})
-	if err != nil || len(vectors) == 0 {
-		return embedText(text)
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		return embedText(text), nil
 	}
-	return cloneFloat64Slice(vectors[0])
+	if len(vectors) == 0 {
+		return embedText(text), nil
+	}
+	return cloneFloat64Slice(vectors[0]), nil
+}
+
+func normalizeContext(ctx context.Context) context.Context {
+	if ctx == nil {
+		return context.Background()
+	}
+	return ctx
 }

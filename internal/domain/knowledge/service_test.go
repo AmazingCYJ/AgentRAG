@@ -37,7 +37,7 @@ func TestKnowledgeDataPersistsAcrossServiceRecreation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("upload document failed: %v", err)
 	}
-	if err := service.StartDocumentChunk(doc.ID); err != nil {
+	if err := service.StartDocumentChunk(context.Background(), doc.ID); err != nil {
 		t.Fatalf("start document chunk failed: %v", err)
 	}
 
@@ -95,14 +95,14 @@ func TestBuildPromptContextReturnsRelevantChunks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("upload document failed: %v", err)
 	}
-	_, err = service.CreateChunk(doc.ID, KnowledgeChunkCreateRequest{
+	_, err = service.CreateChunk(context.Background(), doc.ID, KnowledgeChunkCreateRequest{
 		Content: "请假申请需要先进入审批中心并选择请假流程。",
 	})
 	if err != nil {
 		t.Fatalf("create chunk failed: %v", err)
 	}
 
-	contextText, err := service.BuildPromptContext(nil, "怎么配置请假流程", 3)
+	contextText, err := service.BuildPromptContext(context.Background(), "怎么配置请假流程", 3)
 	if err != nil {
 		t.Fatalf("build prompt context failed: %v", err)
 	}
@@ -133,14 +133,14 @@ func TestBuildPromptContextIncludesSourceMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("upload document failed: %v", err)
 	}
-	_, err = service.CreateChunk(doc.ID, KnowledgeChunkCreateRequest{
+	_, err = service.CreateChunk(context.Background(), doc.ID, KnowledgeChunkCreateRequest{
 		Content: "审批流程需要先配置节点和负责人。",
 	})
 	if err != nil {
 		t.Fatalf("create chunk failed: %v", err)
 	}
 
-	contextText, err := service.BuildPromptContext(nil, "审批流程负责人怎么配置", 1)
+	contextText, err := service.BuildPromptContext(context.Background(), "审批流程负责人怎么配置", 1)
 	if err != nil {
 		t.Fatalf("build prompt context failed: %v", err)
 	}
@@ -175,14 +175,14 @@ func TestBuildPromptContextMatchesBusinessSynonyms(t *testing.T) {
 	if err != nil {
 		t.Fatalf("upload document failed: %v", err)
 	}
-	_, err = service.CreateChunk(doc.ID, KnowledgeChunkCreateRequest{
+	_, err = service.CreateChunk(context.Background(), doc.ID, KnowledgeChunkCreateRequest{
 		Content: "报销流程需要准备发票、审批单和付款账号。",
 	})
 	if err != nil {
 		t.Fatalf("create chunk failed: %v", err)
 	}
 
-	contextText, err := service.BuildPromptContext(nil, "怎么报账", 1)
+	contextText, err := service.BuildPromptContext(context.Background(), "怎么报账", 1)
 	if err != nil {
 		t.Fatalf("build prompt context failed: %v", err)
 	}
@@ -209,7 +209,7 @@ func TestBuildPromptContextUsesVectorSimilarityForTiedKeywordMatches(t *testing.
 	if err != nil {
 		t.Fatalf("upload noisy document failed: %v", err)
 	}
-	_, err = service.CreateChunk(noisyDoc.ID, KnowledgeChunkCreateRequest{
+	_, err = service.CreateChunk(context.Background(), noisyDoc.ID, KnowledgeChunkCreateRequest{
 		Content: "报销流程 发票 账号 密码 登录 审批人 通知 配置 表单 字段 权限 菜单 角色 同步 导出",
 	})
 	if err != nil {
@@ -222,14 +222,14 @@ func TestBuildPromptContextUsesVectorSimilarityForTiedKeywordMatches(t *testing.
 	if err != nil {
 		t.Fatalf("upload focused document failed: %v", err)
 	}
-	_, err = service.CreateChunk(focusedDoc.ID, KnowledgeChunkCreateRequest{
+	_, err = service.CreateChunk(context.Background(), focusedDoc.ID, KnowledgeChunkCreateRequest{
 		Content: "报销流程 发票",
 	})
 	if err != nil {
 		t.Fatalf("create focused chunk failed: %v", err)
 	}
 
-	contextText, err := service.BuildPromptContext(nil, "报销流程 发票", 1)
+	contextText, err := service.BuildPromptContext(context.Background(), "报销流程 发票", 1)
 	if err != nil {
 		t.Fatalf("build prompt context failed: %v", err)
 	}
@@ -260,7 +260,7 @@ func TestSearchDocumentsMatchesBusinessSynonyms(t *testing.T) {
 		t.Fatalf("upload document failed: %v", err)
 	}
 
-	result := service.SearchDocuments("报账", 5)
+	result := service.SearchDocuments(context.Background(), "报账", 5)
 	if len(result) != 1 {
 		t.Fatalf("expected one synonym-matched document, got %#v", result)
 	}
@@ -291,7 +291,7 @@ func TestStartDocumentChunkUsesUploadedTextContent(t *testing.T) {
 		t.Fatalf("upload document failed: %v", err)
 	}
 
-	if err := service.StartDocumentChunk(doc.ID); err != nil {
+	if err := service.StartDocumentChunk(context.Background(), doc.ID); err != nil {
 		t.Fatalf("start document chunk failed: %v", err)
 	}
 	page, err := service.PageChunks(doc.ID, KnowledgeChunkPageRequest{Current: 1, Size: 10})
@@ -331,7 +331,7 @@ func TestKnowledgeChunkCachesLocalEmbedding(t *testing.T) {
 	if err != nil {
 		t.Fatalf("upload document failed: %v", err)
 	}
-	chunk, err := service.CreateChunk(doc.ID, KnowledgeChunkCreateRequest{
+	chunk, err := service.CreateChunk(context.Background(), doc.ID, KnowledgeChunkCreateRequest{
 		Content: "报销流程需要发票和审批单",
 	})
 	if err != nil {
@@ -345,7 +345,7 @@ func TestKnowledgeChunkCachesLocalEmbedding(t *testing.T) {
 	}
 	oldEmbedding := cloneFloat64Slice(chunk.Embedding)
 
-	if err := service.UpdateChunk(doc.ID, chunk.ID, KnowledgeChunkUpdateRequest{Content: "账号登录需要密码"}); err != nil {
+	if err := service.UpdateChunk(context.Background(), doc.ID, chunk.ID, KnowledgeChunkUpdateRequest{Content: "账号登录需要密码"}); err != nil {
 		t.Fatalf("update chunk failed: %v", err)
 	}
 	page, err := service.PageChunks(doc.ID, KnowledgeChunkPageRequest{Current: 1, Size: 10})
@@ -388,7 +388,7 @@ func TestKnowledgeChunkUsesInjectedEmbeddingService(t *testing.T) {
 	if err != nil {
 		t.Fatalf("upload document failed: %v", err)
 	}
-	chunk, err := service.CreateChunk(doc.ID, KnowledgeChunkCreateRequest{Content: "第一段内容"})
+	chunk, err := service.CreateChunk(context.Background(), doc.ID, KnowledgeChunkCreateRequest{Content: "第一段内容"})
 	if err != nil {
 		t.Fatalf("create chunk failed: %v", err)
 	}
@@ -396,7 +396,7 @@ func TestKnowledgeChunkUsesInjectedEmbeddingService(t *testing.T) {
 		t.Fatalf("expected injected embedding on create, got %#v", chunk)
 	}
 
-	if err := service.UpdateChunk(doc.ID, chunk.ID, KnowledgeChunkUpdateRequest{Content: "第二段内容"}); err != nil {
+	if err := service.UpdateChunk(context.Background(), doc.ID, chunk.ID, KnowledgeChunkUpdateRequest{Content: "第二段内容"}); err != nil {
 		t.Fatalf("update chunk failed: %v", err)
 	}
 	page, err := service.PageChunks(doc.ID, KnowledgeChunkPageRequest{Current: 1, Size: 10})
@@ -408,6 +408,193 @@ func TestKnowledgeChunkUsesInjectedEmbeddingService(t *testing.T) {
 	}
 	if len(embeddingService.models) != 2 || embeddingService.models[0] != "embedding-remote" || embeddingService.models[1] != "embedding-remote" {
 		t.Fatalf("expected embedding service to receive knowledge base model, got %#v", embeddingService.models)
+	}
+}
+
+func TestKnowledgeChunkSyncsVectorStoreOnCreateAndUpdate(t *testing.T) {
+	embeddingService := &fakeEmbeddingService{
+		vectors: [][]float64{
+			{0.1, 0.2, 0.3},
+			{0.4, 0.5, 0.6},
+		},
+	}
+	vectorStore := &fakeVectorStore{}
+	service := NewServiceWithDependencies(nil, embeddingService, vectorStore)
+	kbID, err := service.CreateKnowledgeBase(KnowledgeBaseCreateRequest{
+		Name:           "向量同步知识库",
+		EmbeddingModel: "embedding-remote",
+		CollectionName: "remote_docs",
+		CreatedBy:      "admin",
+	})
+	if err != nil {
+		t.Fatalf("create knowledge base failed: %v", err)
+	}
+	doc, err := service.UploadDocument(kbID, KnowledgeDocumentUploadRequest{
+		SourceType: "file",
+		FileName:   "向量同步.md",
+	}, "admin")
+	if err != nil {
+		t.Fatalf("upload document failed: %v", err)
+	}
+
+	chunk, err := service.CreateChunk(context.Background(), doc.ID, KnowledgeChunkCreateRequest{Content: "第一段内容"})
+	if err != nil {
+		t.Fatalf("create chunk failed: %v", err)
+	}
+	if len(vectorStore.upserts) != 1 || len(vectorStore.upserts[0]) != 1 {
+		t.Fatalf("expected one vector upsert on create, got %#v", vectorStore.upserts)
+	}
+	createdVector := vectorStore.upserts[0][0]
+	if createdVector.ID != chunk.ID || createdVector.ChunkID != chunk.ID || createdVector.DocID != doc.ID || createdVector.KBID != kbID {
+		t.Fatalf("unexpected created vector identity %#v", createdVector)
+	}
+	if createdVector.CollectionName != "remote_docs" || createdVector.EmbeddingModel != "embedding-remote" || createdVector.Content != "第一段内容" {
+		t.Fatalf("unexpected created vector payload %#v", createdVector)
+	}
+	if len(createdVector.Embedding) != 3 || createdVector.Embedding[0] != 0.1 {
+		t.Fatalf("unexpected created vector embedding %#v", createdVector.Embedding)
+	}
+
+	if err := service.UpdateChunk(context.Background(), doc.ID, chunk.ID, KnowledgeChunkUpdateRequest{Content: "第二段内容"}); err != nil {
+		t.Fatalf("update chunk failed: %v", err)
+	}
+	if len(vectorStore.upserts) != 2 || len(vectorStore.upserts[1]) != 1 {
+		t.Fatalf("expected second vector upsert on update, got %#v", vectorStore.upserts)
+	}
+	updatedVector := vectorStore.upserts[1][0]
+	if updatedVector.ID != chunk.ID || updatedVector.Content != "第二段内容" {
+		t.Fatalf("unexpected updated vector payload %#v", updatedVector)
+	}
+	if len(updatedVector.Embedding) != 3 || updatedVector.Embedding[0] != 0.4 {
+		t.Fatalf("unexpected updated vector embedding %#v", updatedVector.Embedding)
+	}
+}
+
+func TestKnowledgeServiceDeletesVectorsForRemovedChunks(t *testing.T) {
+	embeddingService := &fakeEmbeddingService{
+		vectors: [][]float64{
+			{1, 0, 0},
+			{0, 1, 0},
+			{0, 0, 1},
+		},
+	}
+	vectorStore := &fakeVectorStore{}
+	service := NewServiceWithDependencies(nil, embeddingService, vectorStore)
+	kbID, err := service.CreateKnowledgeBase(KnowledgeBaseCreateRequest{
+		Name:           "删除同步知识库",
+		EmbeddingModel: "embedding-remote",
+		CollectionName: "delete_docs",
+		CreatedBy:      "admin",
+	})
+	if err != nil {
+		t.Fatalf("create knowledge base failed: %v", err)
+	}
+	doc, err := service.UploadDocument(kbID, KnowledgeDocumentUploadRequest{SourceType: "file", FileName: "删除同步.md"}, "admin")
+	if err != nil {
+		t.Fatalf("upload document failed: %v", err)
+	}
+	chunkA, err := service.CreateChunk(context.Background(), doc.ID, KnowledgeChunkCreateRequest{Content: "第一段"})
+	if err != nil {
+		t.Fatalf("create first chunk failed: %v", err)
+	}
+	chunkB, err := service.CreateChunk(context.Background(), doc.ID, KnowledgeChunkCreateRequest{Content: "第二段"})
+	if err != nil {
+		t.Fatalf("create second chunk failed: %v", err)
+	}
+	docForKBDelete, err := service.UploadDocument(kbID, KnowledgeDocumentUploadRequest{SourceType: "file", FileName: "知识库删除.md"}, "admin")
+	if err != nil {
+		t.Fatalf("upload second document failed: %v", err)
+	}
+	chunkC, err := service.CreateChunk(context.Background(), docForKBDelete.ID, KnowledgeChunkCreateRequest{Content: "第三段"})
+	if err != nil {
+		t.Fatalf("create third chunk failed: %v", err)
+	}
+
+	if err := service.DeleteChunk(context.Background(), doc.ID, chunkA.ID); err != nil {
+		t.Fatalf("delete chunk failed: %v", err)
+	}
+	if len(vectorStore.deleted) != 1 || !sameStrings(vectorStore.deleted[0], []string{chunkA.ID}) {
+		t.Fatalf("expected deleted chunk vector id %s, got %#v", chunkA.ID, vectorStore.deleted)
+	}
+
+	if err := service.DeleteDocument(context.Background(), doc.ID); err != nil {
+		t.Fatalf("delete document failed: %v", err)
+	}
+	if len(vectorStore.deleted) != 2 || !sameStrings(vectorStore.deleted[1], []string{chunkB.ID}) {
+		t.Fatalf("expected deleted document vector id %s, got %#v", chunkB.ID, vectorStore.deleted)
+	}
+
+	if err := service.DeleteKnowledgeBase(context.Background(), kbID); err != nil {
+		t.Fatalf("delete knowledge base failed: %v", err)
+	}
+	if len(vectorStore.deleted) != 3 || !sameStrings(vectorStore.deleted[2], []string{chunkC.ID}) {
+		t.Fatalf("expected deleted knowledge base vector id %s, got %#v", chunkC.ID, vectorStore.deleted)
+	}
+}
+
+func TestBuildPromptContextUsesVectorStoreResultsWhenAvailable(t *testing.T) {
+	embeddingService := &fakeEmbeddingService{
+		vectors: [][]float64{
+			{1, 0, 0},
+			{0, 1, 0},
+			{0.7, 0.2, 0.1},
+		},
+	}
+	vectorStore := &fakeVectorStore{}
+	service := NewServiceWithDependencies(nil, embeddingService, vectorStore)
+	kbID, err := service.CreateKnowledgeBase(KnowledgeBaseCreateRequest{
+		Name:           "向量检索知识库",
+		EmbeddingModel: "embedding-remote",
+		CollectionName: "vector_search_docs",
+		CreatedBy:      "admin",
+	})
+	if err != nil {
+		t.Fatalf("create knowledge base failed: %v", err)
+	}
+	doc, err := service.UploadDocument(kbID, KnowledgeDocumentUploadRequest{
+		SourceType:     "url",
+		SourceLocation: "https://example.com/vector.md",
+		FileName:       "向量检索.md",
+	}, "admin")
+	if err != nil {
+		t.Fatalf("upload document failed: %v", err)
+	}
+	_, err = service.CreateChunk(context.Background(), doc.ID, KnowledgeChunkCreateRequest{Content: "无关内容"})
+	if err != nil {
+		t.Fatalf("create first chunk failed: %v", err)
+	}
+	targetChunk, err := service.CreateChunk(context.Background(), doc.ID, KnowledgeChunkCreateRequest{Content: "付款账号需要先完成审批"})
+	if err != nil {
+		t.Fatalf("create target chunk failed: %v", err)
+	}
+	vectorStore.searchResults = []VectorSearchResult{
+		{Vector: KnowledgeVector{ID: targetChunk.ID, ChunkID: targetChunk.ID}, Score: 0.92},
+	}
+
+	contextText, err := service.BuildPromptContext(context.Background(), "付款账户怎么配置", 1)
+	if err != nil {
+		t.Fatalf("build prompt context failed: %v", err)
+	}
+	if len(vectorStore.searches) != 1 {
+		t.Fatalf("expected one vector search request, got %#v", vectorStore.searches)
+	}
+	searchRequest := vectorStore.searches[0]
+	if searchRequest.Query != "付款账户怎么配置" || searchRequest.CollectionName != "vector_search_docs" || searchRequest.EmbeddingModel != "embedding-remote" {
+		t.Fatalf("unexpected vector search request %#v", searchRequest)
+	}
+	if len(searchRequest.Embedding) != 3 || searchRequest.Embedding[0] != 0.7 {
+		t.Fatalf("expected query embedding from injected service, got %#v", searchRequest.Embedding)
+	}
+	if !strings.Contains(contextText, "向量检索知识库") || !strings.Contains(contextText, "向量检索.md") || !strings.Contains(contextText, "付款账号需要先完成审批") {
+		t.Fatalf("expected vector result context, got %s", contextText)
+	}
+
+	documents := service.SearchDocuments(context.Background(), "付款账户怎么配置", 1)
+	if len(documents) != 1 || documents[0].ID != doc.ID || documents[0].KBName != "向量检索知识库" {
+		t.Fatalf("expected vector document search result, got %#v", documents)
+	}
+	if len(vectorStore.searches) != 2 {
+		t.Fatalf("expected two vector search requests, got %#v", vectorStore.searches)
 	}
 }
 
@@ -460,6 +647,13 @@ type fakeEmbeddingService struct {
 	texts   []string
 }
 
+type fakeVectorStore struct {
+	upserts       [][]KnowledgeVector
+	deleted       [][]string
+	searches      []VectorSearchRequest
+	searchResults []VectorSearchResult
+}
+
 func (s *fakeEmbeddingService) Embed(_ context.Context, model string, texts []string) ([][]float64, error) {
 	s.models = append(s.models, model)
 	s.texts = append(s.texts, texts...)
@@ -469,6 +663,49 @@ func (s *fakeEmbeddingService) Embed(_ context.Context, model string, texts []st
 	vector := s.vectors[0]
 	s.vectors = s.vectors[1:]
 	return [][]float64{cloneFloat64Slice(vector)}, nil
+}
+
+func (s *fakeVectorStore) Upsert(_ context.Context, vectors []KnowledgeVector) error {
+	batch := make([]KnowledgeVector, 0, len(vectors))
+	for _, vector := range vectors {
+		vector.Embedding = cloneFloat64Slice(vector.Embedding)
+		batch = append(batch, vector)
+	}
+	s.upserts = append(s.upserts, batch)
+	return nil
+}
+
+func (s *fakeVectorStore) Delete(_ context.Context, ids []string) error {
+	s.deleted = append(s.deleted, append([]string(nil), ids...))
+	return nil
+}
+
+func (s *fakeVectorStore) Search(_ context.Context, request VectorSearchRequest) ([]VectorSearchResult, error) {
+	request.Embedding = cloneFloat64Slice(request.Embedding)
+	s.searches = append(s.searches, request)
+	results := make([]VectorSearchResult, 0, len(s.searchResults))
+	for _, result := range s.searchResults {
+		result.Vector.Embedding = cloneFloat64Slice(result.Vector.Embedding)
+		results = append(results, result)
+	}
+	return results, nil
+}
+
+func sameStrings(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	leftSet := make(map[string]int, len(left))
+	for _, item := range left {
+		leftSet[item]++
+	}
+	for _, item := range right {
+		if leftSet[item] == 0 {
+			return false
+		}
+		leftSet[item]--
+	}
+	return true
 }
 
 func (r *memoryKnowledgeRepository) LoadKnowledgeRecords() ([]KnowledgeBase, []KnowledgeDocument, []KnowledgeChunk, []KnowledgeDocumentChunkLog, error) {

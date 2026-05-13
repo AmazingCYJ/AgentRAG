@@ -384,6 +384,12 @@ func newKnowledgeService(stateStore *platformstate.FileStore, database *sql.DB) 
 	if database != nil {
 		repository := platformdb.NewSQLKnowledgeRepository(database)
 		if err := repository.Bootstrap(); err == nil {
+			vectorStore := platformdb.NewSQLKnowledgeVectorStore(database)
+			if err := vectorStore.Bootstrap(); err == nil {
+				return domainknowledge.NewServiceWithDependencies(repository, nil, vectorStore)
+			} else {
+				logSQLRepositoryFallback("知识向量", err)
+			}
 			return domainknowledge.NewServiceWithRepository(repository)
 		} else {
 			logSQLRepositoryFallback("知识库", err)

@@ -69,7 +69,7 @@ func (h *KnowledgeChunkHandler) Create(r *ghttp.Request) {
 		resp.WriteError(r, http.StatusBadRequest, "400", "请求参数错误")
 		return
 	}
-	item, err := h.knowledgeService.CreateChunk(r.Get("doc-id").String(), domainknowledge.KnowledgeChunkCreateRequest{
+	item, err := h.knowledgeService.CreateChunk(r.Context(), r.Get("doc-id").String(), domainknowledge.KnowledgeChunkCreateRequest{
 		Content: req.Content,
 		Index:   req.Index,
 		ChunkID: req.ChunkID,
@@ -92,7 +92,7 @@ func (h *KnowledgeChunkHandler) Update(r *ghttp.Request) {
 		resp.WriteError(r, http.StatusBadRequest, "400", "请求参数错误")
 		return
 	}
-	if err := h.knowledgeService.UpdateChunk(r.Get("doc-id").String(), r.Get("chunk-id").String(), domainknowledge.KnowledgeChunkUpdateRequest{
+	if err := h.knowledgeService.UpdateChunk(r.Context(), r.Get("doc-id").String(), r.Get("chunk-id").String(), domainknowledge.KnowledgeChunkUpdateRequest{
 		Content: req.Content,
 	}); err != nil {
 		writeKnowledgeError(r, err)
@@ -107,7 +107,7 @@ func (h *KnowledgeChunkHandler) Delete(r *ghttp.Request) {
 		resp.WriteError(r, http.StatusUnauthorized, "401", "未登录")
 		return
 	}
-	if err := h.knowledgeService.DeleteChunk(r.Get("doc-id").String(), r.Get("chunk-id").String()); err != nil {
+	if err := h.knowledgeService.DeleteChunk(r.Context(), r.Get("doc-id").String(), r.Get("chunk-id").String()); err != nil {
 		writeKnowledgeError(r, err)
 		return
 	}

@@ -95,7 +95,7 @@ func (h *KnowledgeDocumentHandler) StartChunk(r *ghttp.Request) {
 		resp.WriteError(r, http.StatusUnauthorized, "401", "未登录")
 		return
 	}
-	if err := h.knowledgeService.StartDocumentChunk(r.Get("doc-id").String()); err != nil {
+	if err := h.knowledgeService.StartDocumentChunk(r.Context(), r.Get("doc-id").String()); err != nil {
 		writeKnowledgeError(r, err)
 		return
 	}
@@ -108,7 +108,7 @@ func (h *KnowledgeDocumentHandler) Delete(r *ghttp.Request) {
 		resp.WriteError(r, http.StatusUnauthorized, "401", "未登录")
 		return
 	}
-	if err := h.knowledgeService.DeleteDocument(r.Get("doc-id").String()); err != nil {
+	if err := h.knowledgeService.DeleteDocument(r.Context(), r.Get("doc-id").String()); err != nil {
 		writeKnowledgeError(r, err)
 		return
 	}
@@ -184,6 +184,7 @@ func (h *KnowledgeDocumentHandler) Search(r *ghttp.Request) {
 		return
 	}
 	resp.WriteSuccess(r, h.knowledgeService.SearchDocuments(
+		r.Context(),
 		strings.TrimSpace(r.Get("keyword").String()),
 		r.Get("limit").Int(),
 	))

@@ -86,7 +86,7 @@ func (h *KnowledgeBaseHandler) Delete(r *ghttp.Request) {
 		resp.WriteError(r, http.StatusUnauthorized, "401", "未登录")
 		return
 	}
-	if err := h.knowledgeService.DeleteKnowledgeBase(r.Get("kb-id").String()); err != nil {
+	if err := h.knowledgeService.DeleteKnowledgeBase(r.Context(), r.Get("kb-id").String()); err != nil {
 		writeKnowledgeError(r, err)
 		return
 	}
